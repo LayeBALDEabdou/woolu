@@ -1,0 +1,24 @@
+# Utilisé sur le VPS : les images sont construites par GitHub Actions et stockées sur ghcr.io
+services:
+  backend:
+    image: ghcr.io/layebaldeabdou/woolu-backend:${IMAGE_TAG:-latest}
+    env_file: .env
+    ports:
+      - "8088:8088"
+    networks:
+      - default
+      - postgres
+    restart: unless-stopped
+
+  frontend:
+    image: ghcr.io/layebaldeabdou/woolu-frontend:${IMAGE_TAG:-latest}
+    ports:
+      - "3004:3004"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+networks:
+  postgres:
+    name: twoylit_postgres_network
+    external: true

@@ -1,0 +1,25 @@
+services:
+  backend:
+    build: ./backend
+    env_file: .env
+    environment:
+      DJANGO_DB_PATH: /app/data/db.sqlite3
+    volumes:
+      - backend_data:/app/data
+    ports:
+      - "8088:8088"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: ${VITE_API_URL}
+    ports:
+      - "3004:3004"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  backend_data:
