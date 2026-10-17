@@ -72,3 +72,32 @@ export function payerFacture(request: string, reference: string) {
     body: JSON.stringify({ request, reference }),
   })
 }
+
+export const RESEAUX_USDC = [
+  { id: 'solana', nom: 'Solana' },
+  { id: 'polygon', nom: 'Polygon' },
+  { id: 'base', nom: 'Base' },
+  { id: 'ethereum', nom: 'Ethereum' },
+  { id: 'avalanche', nom: 'Avalanche' },
+  { id: 'optimism', nom: 'Optimism' },
+] as const
+
+export interface AdresseDepot {
+  reference: string
+  reseau: string
+  adresse: string
+  statut: 'EN_ATTENTE' | 'RECU'
+  montant?: string | null
+  devise?: string | null
+}
+
+export function creerAdresse(reseau: string) {
+  return appeler<AdresseDepot>('/payments/adresses/', {
+    method: 'POST',
+    body: JSON.stringify({ reseau }),
+  })
+}
+
+export function lireAdresse(reference: string) {
+  return appeler<AdresseDepot>(`/payments/adresses/${encodeURIComponent(reference)}/`)
+}

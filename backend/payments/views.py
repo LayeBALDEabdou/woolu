@@ -4,12 +4,13 @@ import re
 import uuid
 
 from django.conf import settings
+from django.db.models import Q
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
 from . import bitnob_client as bn
-from .models import Commande, PaiementSortant, WebhookEvent
+from .models import AdresseDepot, Commande, PaiementSortant, WebhookEvent
 
 log = logging.getLogger(__name__)
 
@@ -83,6 +84,63 @@ def statut_commande(request, reference):
             "montant_sats": commande.montant_sats,
             "description": commande.description,
             "code_livraison": commande.code_livraison or None,
+        }
+    )
+
+
+# Réseaux Bitnob acceptant l'USDC (la sandbox n'en propose qu'une partie)
+RESEAUX_USDC = ("solana", "polygon", "base", "ethereum", "avalanche", "optimism")
+
+
+@csrf_exempt
+@require_POST
+def creer_adresse(request):
+    """
+    Génère une adresse de dépôt USDC. POST /payments/adresses/ {"reseau": "solana"}
+    Pas de montant : l'adresse accepte n'importe quel dépôt.
+    """
+    try:
+        reseau = str(json.loads(request.body or "{}").get("reseau", "")).lower()
+    except (ValueError, AttributeError):
+        return JsonResponse({"erreur": "JSON invalide"}, status=400)
+    if reseau not in RESEAUX_USDC:
+        return JsonResponse({"erreur": f"Réseau non pris en charge : {', '.join(RESEAUX_USDC)}"}, status=400)
+
+    reference = f"adr-{uuid.uuid4().hex[:12]}"
+    try:
+        reponse = bn.create_address(reseau, reference, label=f"Woolu {reference}")
+    except bn.BitnobError as e:
+        return JsonResponse({"erreur": e.data}, status=e.status)
+
+    infos = reponse.get("data", reponse)
+    if not infos.get("address"):
+        return JsonResponse({"erreur": "Bitnob n'a pas renvoyé d'adresse"}, status=502)
+    depot = AdresseDepot.objects.create(
+        reference=reference,
+        reseau=reseau,
+        adresse=infos["address"],
+        bitnob_id=str(infos.get("id", "")),
+    )
+    return JsonResponse(
+        {"reference": depot.reference, "reseau": depot.reseau, "adresse": depot.adresse, "statut": depot.statut},
+        status=201,
+    )
+
+
+@require_GET
+def statut_adresse(request, reference):
+    """Statut d'une adresse de dépôt, interrogé par le frontend. GET /payments/adresses/<reference>/"""
+    depot = AdresseDepot.objects.filter(reference=reference).first()
+    if not depot:
+        return JsonResponse({"erreur": "Adresse introuvable"}, status=404)
+    return JsonResponse(
+        {
+            "reference": depot.reference,
+            "reseau": depot.reseau,
+            "adresse": depot.adresse,
+            "statut": depot.statut,
+            "montant": depot.montant or None,
+            "devise": depot.devise or None,
         }
     )
 
@@ -231,5 +289,19 @@ def webhook_bitnob(request):
             commande.statut = Commande.Statut.TERMINEE
         commande.save()
 
-    # 4. Toujours répondre 200, sinon Bitnob réessaie
+    # 4. Dépôt sur une adresse USDC : la doc ne fixe pas le nom de l'événement ni des
+    # champs, on reconnaît l'adresse ou notre référence (voir WebhookEvent dans l'admin)
+    if event and "deposit" in event and event.endswith("success"):
+        adresse = data.get("address") or data.get("to_address")
+        depot = AdresseDepot.objects.filter(
+            Q(reference=data.get("reference") or "") | Q(adresse=adresse or "-")
+        ).first()
+        if depot and depot.statut != AdresseDepot.Statut.RECU:
+            depot.statut = AdresseDepot.Statut.RECU
+            depot.montant = str(data.get("amount", ""))
+            depot.devise = str(data.get("currency", ""))[:10]
+            depot.save()
+            log.info("Dépôt reçu sur %s : %s %s", depot.adresse, depot.montant, depot.devise)
+
+    # 5. Toujours répondre 200, sinon Bitnob réessaie
     return HttpResponse(status=200)

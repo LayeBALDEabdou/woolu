@@ -6,7 +6,7 @@ from unittest.mock import patch
 from django.test import TestCase, override_settings
 
 from . import bitnob_client as bn
-from .models import Commande, PaiementSortant, WebhookEvent
+from .models import AdresseDepot, Commande, PaiementSortant, WebhookEvent
 
 SECRET = "secret-de-test"
 WEBHOOK_URL = "/payments/webhooks/bitnob/"
@@ -177,3 +177,57 @@ class PayerFactureTests(TestCase):
         r = self.poster("/payments/factures/payer/", {"request": FACTURE, "reference": "pay-0b8f6c2e-1a2b"})
         self.assertEqual(r.status_code, 403)
         mock_pay.assert_not_called()
+
+
+class AdresseDepotTests(TestCase):
+    @patch.object(bn, "create_address", return_value={"id": "uuid-1", "address": "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU", "chain": "solana"})
+    def test_creation(self, mock_adresse):
+        r = self.client.post("/payments/adresses/", {"reseau": "Solana"}, content_type="application/json")
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.json()["adresse"], "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU")
+        self.assertEqual(mock_adresse.call_args.args[0], "solana")
+        self.assertEqual(AdresseDepot.objects.get().bitnob_id, "uuid-1")
+
+    def test_reseau_inconnu(self):
+        r = self.client.post("/payments/adresses/", {"reseau": "tron"}, content_type="application/json")
+        self.assertEqual(r.status_code, 400)
+
+    @patch.object(bn, "create_address", return_value={"id": "uuid-1"})
+    def test_reponse_sans_adresse(self, _):
+        r = self.client.post("/payments/adresses/", {"reseau": "solana"}, content_type="application/json")
+        self.assertEqual(r.status_code, 502)
+        self.assertEqual(AdresseDepot.objects.count(), 0)
+
+    def test_statut(self):
+        AdresseDepot.objects.create(reference="adr-1", reseau="solana", adresse="abc")
+        r = self.client.get("/payments/adresses/adr-1/")
+        self.assertEqual(r.json()["statut"], AdresseDepot.Statut.EN_ATTENTE)
+        self.assertEqual(self.client.get("/payments/adresses/inconnue/").status_code, 404)
+
+
+@override_settings(BITNOB_WEBHOOK_SECRET=SECRET)
+class WebhookDepotTests(TestCase):
+    def setUp(self):
+        self.depot = AdresseDepot.objects.create(reference="adr-1", reseau="solana", adresse="AdrSolana123")
+
+    def envoyer(self, payload):
+        body = json.dumps(payload).encode()
+        return self.client.post(
+            WEBHOOK_URL, body, content_type="application/json", headers={"x-bitnob-signature": signer(body)}
+        )
+
+    def test_depot_reconnu_par_adresse(self):
+        self.envoyer({"event": "stablecoin.deposit.success", "event_id": "evt-d1",
+                      "data": {"address": "AdrSolana123", "amount": "5.5", "currency": "USDC", "reference": "tx-1"}})
+        self.depot.refresh_from_db()
+        self.assertEqual((self.depot.statut, self.depot.montant, self.depot.devise), ("RECU", "5.5", "USDC"))
+
+    def test_depot_reconnu_par_reference(self):
+        self.envoyer({"event": "deposit.success", "event_id": "evt-d2", "data": {"reference": "adr-1", "amount": 2}})
+        self.depot.refresh_from_db()
+        self.assertEqual(self.depot.statut, AdresseDepot.Statut.RECU)
+
+    def test_autre_adresse_ignoree(self):
+        self.envoyer({"event": "deposit.success", "event_id": "evt-d3", "data": {"address": "Autre", "reference": "tx-9"}})
+        self.depot.refresh_from_db()
+        self.assertEqual(self.depot.statut, AdresseDepot.Statut.EN_ATTENTE)
