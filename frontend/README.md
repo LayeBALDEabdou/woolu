@@ -7,4 +7,4 @@ npm install
 npm run dev      # http://localhost:5173, appelle le backend sur http://localhost:8000
 ```
 
-L'URL de l'API se règle avec `VITE_API_URL` (fixée au build en production).
+L'URL de l'API de production est dans `.env.production` (lue au build).

@@ -65,8 +65,6 @@ jobs:
         with:
           context: ./${{ matrix.service }}
           push: true
-          build-args: |
-            VITE_API_URL=${{ vars.VITE_API_URL }}
           tags: |
             ${{ env.IMAGE_PREFIX }}-${{ matrix.service }}:latest
             ${{ env.IMAGE_PREFIX }}-${{ matrix.service }}:${{ github.sha }}
