@@ -13,8 +13,13 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Charge backend/.env en local (n'écrase pas les variables déjà définies, ex: Docker)
+load_dotenv(BASE_DIR / '.env')
 
 
 # Quick-start development settings - unsuitable for production
@@ -42,6 +47,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'corsheaders',
+    'payments',
 ]
 
 MIDDLEWARE = [
@@ -153,4 +159,17 @@ MAILERS = {
     'default': {
         'BACKEND': 'django.core.mail.backends.console.EmailBackend',
     },
+}
+
+
+# --- Bitnob (valeurs lues depuis le .env) ---
+BITNOB_CLIENT_ID = os.environ.get('BITNOB_CLIENT_ID', '')
+BITNOB_CLIENT_SECRET = os.environ.get('BITNOB_CLIENT_SECRET', '')
+BITNOB_WEBHOOK_SECRET = os.environ.get('BITNOB_WEBHOOK_SECRET', '')
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {'console': {'class': 'logging.StreamHandler'}},
+    'loggers': {'payments': {'handlers': ['console'], 'level': 'INFO'}},
 }
