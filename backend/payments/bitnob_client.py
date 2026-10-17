@@ -96,6 +96,19 @@ def create_lightning_invoice(amount_sats: int, description: str, reference: str)
     )
 
 
+def decode_invoice(payment_request: str):
+    return bitnob("POST", "/api/lightning/decode", {"request": payment_request})
+
+
+def pay_invoice(payment_request: str, reference: str):
+    """Paie une facture BOLT11 avec le solde du compte Bitnob (l'argent sort !)."""
+    return bitnob(
+        "POST",
+        "/api/lightning/pay",
+        {"request": payment_request, "reference": reference},
+    )
+
+
 def create_address(chain: str, reference: str, label: str = ""):
     return bitnob(
         "POST",

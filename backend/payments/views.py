@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import uuid
 
 from django.conf import settings
@@ -8,7 +9,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
 from . import bitnob_client as bn
-from .models import Commande, WebhookEvent
+from .models import Commande, PaiementSortant, WebhookEvent
 
 log = logging.getLogger(__name__)
 
@@ -55,7 +56,132 @@ def creer_commande(request):
         commande.save()
         return JsonResponse({"erreur": e.data}, status=e.status)
 
-    return JsonResponse({"reference": reference, "facture": facture}, status=201)
+    # Selon les endpoints, Bitnob renvoie la facture à la racine ou sous "data"
+    infos = facture.get("data", facture) if isinstance(facture, dict) else {}
+    return JsonResponse(
+        {
+            "reference": reference,
+            "statut": commande.statut,
+            "request": infos.get("request"),  # facture BOLT11 à payer
+            "expires_at": infos.get("expires_at"),
+            "facture": facture,
+        },
+        status=201,
+    )
+
+
+@require_GET
+def statut_commande(request, reference):
+    """Statut d'une commande, interrogé par le frontend. GET /payments/commandes/<reference>/"""
+    commande = Commande.objects.filter(reference=reference).first()
+    if not commande:
+        return JsonResponse({"erreur": "Commande introuvable"}, status=404)
+    return JsonResponse(
+        {
+            "reference": commande.reference,
+            "statut": commande.statut,
+            "montant_sats": commande.montant_sats,
+            "description": commande.description,
+            "code_livraison": commande.code_livraison or None,
+        }
+    )
+
+
+REFERENCE_PAIEMENT = re.compile(r"^pay-[0-9a-f-]{8,40}$")
+
+
+def _lire_facture(request):
+    """Renvoie (facture, données JSON, None) ou (None, None, réponse d'erreur)."""
+    try:
+        data = json.loads(request.body or "{}")
+        brut = str(data.get("request", "")).strip()
+    except (ValueError, AttributeError):
+        return None, None, JsonResponse({"erreur": "JSON invalide"}, status=400)
+    facture = brut.lower().removeprefix("lightning:")
+    if "@" in facture:
+        return None, None, JsonResponse(
+            {"erreur": "Les adresses Lightning ne sont pas prises en charge : collez une facture (lntb… / lnbc…)."},
+            status=400,
+        )
+    if not facture.startswith("ln"):
+        return None, None, JsonResponse({"erreur": "Ce n'est pas une facture Lightning."}, status=400)
+    return facture, data, None
+
+
+def _paiements_sortants_autorises():
+    # Payer sort de l'argent du compte Bitnob : tant que l'app n'a pas de comptes
+    # utilisateurs, c'est limité au mode debug (sandbox en local)
+    return settings.DEBUG
+
+
+@csrf_exempt
+@require_POST
+def decoder_facture(request):
+    """Montant et description d'une facture avant de la payer. POST /payments/factures/decoder/ {"request": "lntb..."}"""
+    if not _paiements_sortants_autorises():
+        return JsonResponse({"erreur": "Paiements désactivés en production."}, status=403)
+    facture, _, erreur = _lire_facture(request)
+    if erreur:
+        return erreur
+    try:
+        infos = bn.decode_invoice(facture)
+    except bn.BitnobError as e:
+        return JsonResponse({"erreur": e.data}, status=e.status)
+    infos = infos.get("data", infos)
+    return JsonResponse(
+        {
+            "request": facture,
+            "montant_sats": infos.get("amount_sat"),
+            "description": infos.get("description", ""),
+            "expires_at": infos.get("expires_at"),
+            "expiree": bool(infos.get("is_expired")),
+        }
+    )
+
+
+@csrf_exempt
+@require_POST
+def payer_facture(request):
+    """
+    Paie une facture avec le solde Bitnob.
+    POST /payments/factures/payer/ {"request": "lntb...", "reference": "pay-<uuid>"}
+    La référence vient du frontend : un double clic ne paie qu'une fois.
+    """
+    if not _paiements_sortants_autorises():
+        return JsonResponse({"erreur": "Paiements désactivés en production."}, status=403)
+    facture, data, erreur = _lire_facture(request)
+    if erreur:
+        return erreur
+    reference = str(data.get("reference", ""))
+    if not REFERENCE_PAIEMENT.match(reference):
+        return JsonResponse({"erreur": "Référence de paiement invalide"}, status=400)
+
+    paiement, _ = PaiementSortant.objects.get_or_create(
+        reference=reference, defaults={"facture": facture}
+    )
+    try:
+        reponse = bn.pay_invoice(facture, reference)
+    except bn.BitnobError as e:
+        paiement.statut = "failed"
+        paiement.reponse = {"erreur": e.data}
+        paiement.save()
+        return JsonResponse({"erreur": e.data}, status=e.status)
+
+    infos = reponse.get("data", reponse)
+    paiement.statut = infos.get("status", "pending")
+    paiement.montant_sats = int(infos["amount_sat"]) if str(infos.get("amount_sat", "")).isdigit() else None
+    paiement.reponse = reponse
+    paiement.save()
+    log.info("Paiement sortant %s : %s sats, %s", reference, paiement.montant_sats, paiement.statut)
+    return JsonResponse(
+        {
+            "reference": reference,
+            "statut": paiement.statut,
+            "montant_sats": paiement.montant_sats,
+            "frais_sats": infos.get("fee_sat"),
+        },
+        status=201,
+    )
 
 
 @csrf_exempt  # Bitnob ne peut pas envoyer de jeton CSRF

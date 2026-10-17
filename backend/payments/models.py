@@ -35,3 +35,17 @@ class WebhookEvent(models.Model):
     event = models.CharField(max_length=64, blank=True)
     payload = models.JSONField()
     recu_le = models.DateTimeField(auto_now_add=True)
+
+
+class PaiementSortant(models.Model):
+    """Facture Lightning payée avec le solde Bitnob : garde une trace de l'argent sorti."""
+
+    reference = models.CharField(max_length=64, unique=True)
+    facture = models.TextField()
+    montant_sats = models.PositiveIntegerField(null=True, blank=True)
+    statut = models.CharField(max_length=20, default="pending")  # paid / pending / failed
+    reponse = models.JSONField(default=dict, blank=True)
+    cree_le = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.reference} ({self.statut})"
