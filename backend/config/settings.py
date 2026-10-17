@@ -166,6 +166,8 @@ MAILERS = {
 BITNOB_CLIENT_ID = os.environ.get('BITNOB_CLIENT_ID', '')
 BITNOB_CLIENT_SECRET = os.environ.get('BITNOB_CLIENT_SECRET', '')
 BITNOB_WEBHOOK_SECRET = os.environ.get('BITNOB_WEBHOOK_SECRET', '')
+# Paiement de factures sans connexion, pour tester en ligne (clé sandbox uniquement)
+BITNOB_PAIEMENTS_PUBLICS = os.environ.get('BITNOB_PAIEMENTS_PUBLICS') == '1'
 
 LOGGING = {
     'version': 1,

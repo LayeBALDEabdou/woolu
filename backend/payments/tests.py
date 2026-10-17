@@ -164,3 +164,16 @@ class PayerFactureTests(TestCase):
         r = self.poster("/payments/factures/payer/", {"request": FACTURE, "reference": "pay-0b8f6c2e-1a2b"})
         self.assertEqual(r.status_code, 403)
         mock_pay.assert_not_called()
+
+    @override_settings(DEBUG=False, BITNOB_PAIEMENTS_PUBLICS=True, BITNOB_CLIENT_SECRET="prd:sandbox_abc")
+    @patch.object(bn, "pay_invoice", return_value={"data": {"status": "paid", "amount_sat": "10"}})
+    def test_active_en_production_avec_cle_sandbox(self, mock_pay):
+        r = self.poster("/payments/factures/payer/", {"request": FACTURE, "reference": "pay-0b8f6c2e-1a2b"})
+        self.assertEqual(r.status_code, 201)
+
+    @override_settings(DEBUG=False, BITNOB_PAIEMENTS_PUBLICS=True, BITNOB_CLIENT_SECRET="prd:live_abc")
+    @patch.object(bn, "pay_invoice")
+    def test_refuse_avec_vraie_cle(self, mock_pay):
+        r = self.poster("/payments/factures/payer/", {"request": FACTURE, "reference": "pay-0b8f6c2e-1a2b"})
+        self.assertEqual(r.status_code, 403)
+        mock_pay.assert_not_called()

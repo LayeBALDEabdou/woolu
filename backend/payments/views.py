@@ -110,8 +110,11 @@ def _lire_facture(request):
 
 def _paiements_sortants_autorises():
     # Payer sort de l'argent du compte Bitnob : tant que l'app n'a pas de comptes
-    # utilisateurs, c'est limité au mode debug (sandbox en local)
-    return settings.DEBUG
+    # utilisateurs, c'est limité au mode debug, ou à BITNOB_PAIEMENTS_PUBLICS avec
+    # une clé sandbox (se désactive tout seul avec une vraie clé)
+    if settings.DEBUG:
+        return True
+    return settings.BITNOB_PAIEMENTS_PUBLICS and "sandbox" in settings.BITNOB_CLIENT_SECRET
 
 
 @csrf_exempt
