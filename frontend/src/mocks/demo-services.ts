@@ -60,7 +60,14 @@ export function createDemoServices(): AppServices {
         }),
       // Mode démo : le mot de passe n'est ni vérifié ni conservé.
       login: (input) => withState((state) => backend.login(state, input.email)),
-      register: (input) => withState((state, now) => backend.register(state, input, now)),
+      // Mode démo : aucun e-mail n'est envoyé, le compte est actif tout de suite.
+      register: (input) =>
+        withState((state, now) => ({ status: "authenticated" as const, session: backend.register(state, input, now) })),
+      verifyEmail: async () => {
+        await simulateLatency()
+        throw new ApiError("VALIDATION", "La confirmation par e-mail n'existe pas en mode démonstration.")
+      },
+      resendVerification: () => simulateLatency(),
       logout: () =>
         withState((state) => {
           state.sessionUserId = null

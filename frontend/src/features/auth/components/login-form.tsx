@@ -2,22 +2,26 @@
 
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
+import { useState } from "react"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useForm } from "react-hook-form"
 import { Loader2 } from "lucide-react"
 import { PasswordField, TextField } from "@/components/forms/form-fields"
 import { Button } from "@/components/ui/button"
 import { FieldGroup } from "@/components/ui/field"
+import { isApiError } from "@/lib/api/errors"
 import { handleFormError, safeRedirectPath } from "@/lib/forms"
 import { useLogin } from "../hooks"
 import { type LoginValues, loginSchema } from "../schemas/auth-schemas"
 import { DemoAccountPicker } from "./demo-account-picker"
+import { EmailVerificationNotice } from "./email-verification-notice"
 
 export function LoginForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const redirectTo = safeRedirectPath(searchParams.get("redirect"))
   const login = useLogin()
+  const [unverifiedEmail, setUnverifiedEmail] = useState<string | null>(null)
   const {
     register,
     handleSubmit,
@@ -28,9 +32,16 @@ export function LoginForm() {
   const onSubmit = handleSubmit((values) =>
     login.mutate(values, {
       onSuccess: () => router.replace(redirectTo),
-      onError: (error) => handleFormError(error, setError, ["email", "password"]),
+      onError: (error) => {
+        if (isApiError(error) && error.code === "EMAIL_NOT_VERIFIED") setUnverifiedEmail(values.email)
+        else handleFormError(error, setError, ["email", "password"])
+      },
     }),
   )
+
+  if (unverifiedEmail) {
+    return <EmailVerificationNotice email={unverifiedEmail} reason="login" onBack={() => setUnverifiedEmail(null)} />
+  }
 
   return (
     <div className="space-y-6">

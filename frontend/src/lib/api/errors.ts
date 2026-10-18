@@ -1,5 +1,6 @@
 export const API_ERROR_CODES = [
   "UNAUTHENTICATED",
+  "EMAIL_NOT_VERIFIED",
   "FORBIDDEN",
   "NOT_FOUND",
   "VALIDATION",
@@ -13,6 +14,7 @@ export type ApiErrorCode = (typeof API_ERROR_CODES)[number]
 
 const DEFAULT_MESSAGES: Record<ApiErrorCode, string> = {
   UNAUTHENTICATED: "Votre session a expiré. Veuillez vous reconnecter.",
+  EMAIL_NOT_VERIFIED: "Confirmez votre adresse e-mail avec le lien reçu avant de vous connecter.",
   FORBIDDEN: "Vous n'êtes pas autorisé à effectuer cette action.",
   NOT_FOUND: "L'élément demandé est introuvable.",
   VALIDATION: "Certaines informations sont invalides.",

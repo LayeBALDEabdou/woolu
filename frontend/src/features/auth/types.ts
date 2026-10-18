@@ -18,6 +18,13 @@ export interface Session {
   isDemo: boolean
 }
 
+/**
+ * Issue d'une inscription : soit la session est ouverte tout de suite (mode démo), soit le
+ * backend attend que l'adresse e-mail soit confirmée par le lien qu'il vient d'envoyer.
+ */
+export type RegisterResult =
+  { status: "authenticated"; session: Session } | { status: "verification_required"; email: string }
+
 export interface LoginInput {
   email: string
   password: string
