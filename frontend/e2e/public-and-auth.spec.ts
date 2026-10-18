@@ -5,6 +5,8 @@ test.describe("site public", () => {
     await page.goto("/")
     await expect(page.getByRole("heading", { level: 1 })).toContainText("Le vendeur livre.")
 
+    await page.goto("/questions-frequentes")
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Questions fréquentes")
     const question = page.getByText("Quand le vendeur reçoit-il l'argent ?")
     await question.click()
     await expect(page.getByText(/Lorsque le client confirme la réception/)).toBeVisible()

@@ -6,7 +6,7 @@ import { PublicMobileNav } from "@/components/navigation/public-mobile-nav"
 export const PUBLIC_NAV = [
   { href: "/fonctionnement", label: "Fonctionnement" },
   { href: "/securite", label: "Sécurité et règles" },
-  { href: "/#faq", label: "Questions fréquentes" },
+  { href: "/questions-frequentes", label: "Questions fréquentes" },
 ] as const
 
 export function SiteHeader() {
