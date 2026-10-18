@@ -163,3 +163,21 @@ class WhoamiTests(TestCase):
     @override_settings(DEBUG=False)
     def test_reserve_aux_admins(self):
         self.assertEqual(self.client.get("/payments/whoami/").status_code, 403)
+
+
+class DocumentationTests(TestCase):
+    def test_schema_couvre_toutes_les_routes(self):
+        from .urls import urlpatterns
+
+        r = self.client.get("/api/schema/")
+        self.assertEqual(r.status_code, 200)
+        chemins = set(r.json()["paths"])
+        for route in urlpatterns:
+            chemin = "/payments/" + str(route.pattern).replace("<str:reference>", "{reference}")
+            self.assertIn(chemin, chemins)
+
+    @override_settings(DEBUG=False)
+    def test_swagger_ui_accessible_en_production(self):
+        r = self.client.get("/api/docs/")
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "/api/schema/")
