@@ -4,7 +4,7 @@ from django.test import RequestFactory
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import AccessToken
 
-from .models import Role
+from .models import Role, UserProfile
 from .permissions import IsAdmin, IsClient, IsPrestataire
 
 User = get_user_model()
@@ -16,11 +16,14 @@ class AccountTests(APITestCase):
         cache.clear()
 
     def register(self, email='a@test.com', role='client', password=PASSWORD, **extra):
-        return self.client.post(
+        response = self.client.post(
             '/api/auth/register/',
             {'email': email, 'password': password, 'role': role, **extra},
             format='json',
         )
+        # Comme si l'utilisateur avait cliqué sur le lien de confirmation
+        UserProfile.objects.filter(user__email=email.strip().lower()).update(email_verified=True)
+        return response
 
     def login(self, email='a@test.com', password=PASSWORD):
         return self.client.post(
@@ -182,3 +185,11 @@ class AccountTests(APITestCase):
         ):
             request.user = user
             self.assertEqual(permission.has_permission(request, None), expected)
+
+    def test_login_refused_until_email_is_verified(self):
+        self.client.post(
+            '/api/auth/register/',
+            {'email': 'new@test.com', 'password': PASSWORD, 'role': 'client'},
+            format='json',
+        )
+        self.assertEqual(self.login(email='new@test.com').status_code, 403)

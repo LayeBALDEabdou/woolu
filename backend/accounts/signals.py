@@ -9,4 +9,7 @@ from .models import Role, UserProfile
 def create_user_profile(sender, instance, created, **kwargs):
     if created:
         role = Role.ADMIN if instance.is_superuser else Role.CLIENT
-        UserProfile.objects.get_or_create(user=instance, defaults={'role': role})
+        # Un superuser créé en ligne de commande n'a pas d'email à confirmer
+        UserProfile.objects.get_or_create(
+            user=instance, defaults={'role': role, 'email_verified': instance.is_superuser}
+        )

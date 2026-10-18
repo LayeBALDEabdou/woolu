@@ -226,6 +226,7 @@ REST_FRAMEWORK = {
         'login': '20/min',
         'register': '10/hour',
         'password': '10/hour',
+        'email': '10/hour',
     },
 }
 

@@ -448,11 +448,20 @@ SCHEMA = {
             },
             "ErreurApi": {
                 "type": "object",
-                "description": "Format d'erreur des routes /api/transactions et /api/dashboard",
+                "description": "Format d'erreur des routes de session, /api/transactions et /api/dashboard",
                 "properties": {
                     "code": {
                         "type": "string",
-                        "enum": ["UNAUTHENTICATED", "FORBIDDEN", "NOT_FOUND", "VALIDATION", "INVALID_TRANSITION", "RATE_LIMITED", "SERVER"],
+                        "enum": [
+                            "UNAUTHENTICATED",
+                            "FORBIDDEN",
+                            "EMAIL_NOT_VERIFIED",
+                            "NOT_FOUND",
+                            "VALIDATION",
+                            "INVALID_TRANSITION",
+                            "RATE_LIMITED",
+                            "SERVER",
+                        ],
                     },
                     "message": {"type": "string"},
                     "fieldErrors": {"type": "object", "additionalProperties": {"type": "string"}},
@@ -581,7 +590,10 @@ SCHEMA["paths"].update(
             "post": {
                 **PUBLIC,
                 "summary": "Se connecter",
-                "description": "Limité à 20 tentatives par minute. Pose le cookie de session.",
+                "description": (
+                    "Limité à 20 tentatives par minute. Pose le cookie de session. "
+                    "Refusé avec le code `EMAIL_NOT_VERIFIED` tant que l'email n'est pas confirmé."
+                ),
                 "requestBody": corps(
                     {
                         "type": "object",
@@ -589,14 +601,22 @@ SCHEMA["paths"].update(
                         "properties": {"email": {"type": "string", "format": "email"}, "password": MOT_DE_PASSE},
                     }
                 ),
-                "responses": {"200": reponse("Connecté", SESSION), "401": ERREUR_API, "429": ERREUR_API},
+                "responses": {
+                    "200": reponse("Connecté", SESSION),
+                    "401": ERREUR_API,
+                    "403": reponse("Email non confirmé (`EMAIL_NOT_VERIFIED`)", {"$ref": "#/components/schemas/ErreurApi"}),
+                    "429": ERREUR_API,
+                },
             }
         },
         "/api/auth/register": {
             "post": {
                 **PUBLIC,
                 "summary": "Créer un compte",
-                "description": "Limité à 10 inscriptions par heure. Connecte directement le nouveau compte.",
+                "description": (
+                    "Limité à 10 inscriptions par heure. Ne connecte pas : un lien de confirmation est envoyé "
+                    "par email vers `/verification-email?token=…` du frontend."
+                ),
                 "requestBody": corps(
                     {
                         "type": "object",
@@ -610,7 +630,14 @@ SCHEMA["paths"].update(
                         },
                     }
                 ),
-                "responses": {"201": reponse("Compte créé et connecté", SESSION), "400": ERREUR_API, "429": ERREUR_API},
+                "responses": {
+                    "201": reponse(
+                        "Compte créé, en attente de confirmation",
+                        {"type": "object", "properties": {"user": UTILISATEUR_FRONT, "verificationRequired": {"type": "boolean", "const": True}}},
+                    ),
+                    "400": ERREUR_API,
+                    "429": ERREUR_API,
+                },
             }
         },
         "/api/auth/logout": {
@@ -619,6 +646,28 @@ SCHEMA["paths"].update(
                 "summary": "Se déconnecter",
                 "security": [],
                 "responses": {"204": {"description": "Déconnecté"}},
+            }
+        },
+        "/api/auth/email/verify": {
+            "post": {
+                **PUBLIC,
+                "summary": "Confirmer l'adresse e-mail",
+                "description": "Active le compte et connecte directement. Le lien ne sert qu'une fois.",
+                "requestBody": corps(
+                    {"type": "object", "required": ["token"], "properties": {"token": {"type": "string", "description": "Paramètre du lien reçu"}}}
+                ),
+                "responses": {"200": reponse("Compte confirmé et connecté", SESSION), "400": ERREUR_API, "429": ERREUR_API},
+            }
+        },
+        "/api/auth/email/resend": {
+            "post": {
+                **PUBLIC,
+                "summary": "Renvoyer l'email de confirmation",
+                "description": "Répond 204 même si le compte n'existe pas ou est déjà confirmé.",
+                "requestBody": corps(
+                    {"type": "object", "required": ["email"], "properties": {"email": {"type": "string", "format": "email"}}}
+                ),
+                "responses": {"204": {"description": "Demande prise en compte"}, "429": ERREUR_API},
             }
         },
         "/api/auth/password/forgot": {

@@ -3,18 +3,13 @@ Authentification du frontend par cookie de session httpOnly (frontend/docs/API_E
 Les routes JWT de views.py restent disponibles pour Swagger et les autres clients.
 """
 
-import logging
 import re
 
-from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model, login, logout, update_session_auth_hash
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.tokens import default_token_generator
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.core.mail import send_mail
 from django.utils.decorators import method_decorator
-from django.utils.encoding import force_bytes, force_str
-from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from django.views.decorators.csrf import ensure_csrf_cookie
 from rest_framework import exceptions, serializers, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -23,12 +18,12 @@ from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 
-from config.api_errors import ApiErrorsMixin
+from config.api_errors import ApiErrorsMixin, error
 
+from .emails import email_verification_token, read_token, send_password_reset_email, send_verification_email
 from .serializers import SELF_REGISTER_ROLES, RegisterSerializer
 
 User = get_user_model()
-log = logging.getLogger(__name__)
 PHONE = re.compile(r'^\+?[0-9]{8,15}$')
 
 
@@ -111,6 +106,13 @@ class LoginView(PublicAuthView):
         if not user:
             # Message identique que le compte existe ou non
             raise exceptions.AuthenticationFailed('Adresse e-mail ou mot de passe incorrect.')
+        # Vérifié après le mot de passe : on ne révèle rien sur un compte qu'on ne possède pas
+        if not user.account_profile.email_verified:
+            return error(
+                'EMAIL_NOT_VERIFIED',
+                'Confirmez votre adresse e-mail avec le lien reçu à l\'inscription avant de vous connecter.',
+                status.HTTP_403_FORBIDDEN,
+            )
         login(request, user)
         return Response(session_json(user))
 
@@ -153,8 +155,9 @@ class RegisterView(PublicAuthView):
                 errors = {**errors, 'password': errors.pop('non_field_errors')}
             raise serializers.ValidationError({REGISTER_FIELDS.get(k, k): v for k, v in errors.items()})
         user = register.save()
-        login(request, user, backend='django.contrib.auth.backends.ModelBackend')
-        return Response(session_json(user), status=status.HTTP_201_CREATED)
+        send_verification_email(user)
+        # Pas de session : le compte s'active avec le lien reçu par email
+        return Response({'user': user_json(user), 'verificationRequired': True}, status=status.HTTP_201_CREATED)
 
 
 class LogoutView(AuthView):
@@ -177,20 +180,7 @@ class PasswordForgotView(PublicAuthView):
         data.is_valid(raise_exception=True)
         user = User.objects.filter(email__iexact=data.validated_data['email'].strip(), is_active=True).first()
         if user:
-            uid = urlsafe_base64_encode(force_bytes(user.pk))
-            token = f'{uid}.{default_token_generator.make_token(user)}'
-            link = f'{settings.FRONTEND_URL}/reinitialisation-mot-de-passe?token={token}'
-            try:
-                send_mail(
-                    'Réinitialisation de votre mot de passe Wóolu',
-                    f'Pour choisir un nouveau mot de passe, ouvrez ce lien :\n\n{link}\n\n'
-                    "Si vous n'êtes pas à l'origine de cette demande, ignorez ce message.",
-                    None,
-                    [user.email],
-                )
-            except OSError:
-                # SMTP injoignable ou refusé : on le note sans révéler à l'appelant que le compte existe
-                log.exception("Email de réinitialisation non envoyé à l'utilisateur %s", user.pk)
+            send_password_reset_email(user)
         # Même réponse si le compte n'existe pas : on ne révèle rien
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -206,12 +196,8 @@ class PasswordResetView(PublicAuthView):
     def post(self, request):
         data = ResetInput(data=request.data)
         data.is_valid(raise_exception=True)
-        uid, _, token = data.validated_data['token'].partition('.')
-        try:
-            user = User.objects.get(pk=force_str(urlsafe_base64_decode(uid)))
-        except (ValueError, User.DoesNotExist):
-            user = None
-        if not user or not default_token_generator.check_token(user, token):
+        user = read_token(data.validated_data['token'], default_token_generator)
+        if not user:
             raise serializers.ValidationError('Ce lien de réinitialisation est invalide ou a expiré.')
         try:
             validate_password(data.validated_data['password'], user)
@@ -220,6 +206,43 @@ class PasswordResetView(PublicAuthView):
         user.set_password(data.validated_data['password'])
         user.save(update_fields=['password'])
         revoke_jwt(user)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class TokenInput(serializers.Serializer):
+    token = serializers.CharField()
+
+
+class VerifyEmailView(PublicAuthView):
+    throttle_scope = 'email'
+
+    def post(self, request):
+        data = TokenInput(data=request.data)
+        data.is_valid(raise_exception=True)
+        user = read_token(data.validated_data['token'], email_verification_token)
+        if not user:
+            raise serializers.ValidationError('Ce lien de confirmation est invalide ou a expiré.')
+        user.account_profile.email_verified = True
+        user.account_profile.save(update_fields=['email_verified'])
+        # Le lien prouve l'accès à la boîte mail : on connecte directement
+        login(request, user, backend='django.contrib.auth.backends.ModelBackend')
+        return Response(session_json(user))
+
+
+class ResendVerificationView(PublicAuthView):
+    throttle_scope = 'email'
+
+    def post(self, request):
+        data = ForgotInput(data=request.data)
+        data.is_valid(raise_exception=True)
+        user = User.objects.filter(
+            email__iexact=data.validated_data['email'].strip(),
+            is_active=True,
+            account_profile__email_verified=False,
+        ).first()
+        if user:
+            send_verification_email(user)
+        # Même réponse si le compte n'existe pas ou est déjà confirmé
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

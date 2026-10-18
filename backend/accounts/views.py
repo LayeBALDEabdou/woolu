@@ -11,6 +11,7 @@ from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, Ou
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 
+from .emails import send_verification_email
 from .serializers import (
     ChangePasswordSerializer,
     LoginSerializer,
@@ -33,6 +34,7 @@ class RegisterView(generics.CreateAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
+        send_verification_email(user)
         return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
 
 

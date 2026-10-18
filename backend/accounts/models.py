@@ -23,5 +23,8 @@ class UserProfile(models.Model):
         validators=[RegexValidator(r'^\+?[0-9]{8,15}$', 'Numéro de téléphone invalide.')],
     )
 
+    # Faux tant que l'utilisateur n'a pas cliqué sur le lien reçu à l'inscription
+    email_verified = models.BooleanField(default=False)
+
     def __str__(self):
         return f'{self.user.email or self.user.username} ({self.role})'

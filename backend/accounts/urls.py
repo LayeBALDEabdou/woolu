@@ -9,6 +9,8 @@ urlpatterns = [
     path('auth/login', session_views.LoginView.as_view()),
     path('auth/register', session_views.RegisterView.as_view()),
     path('auth/logout', session_views.LogoutView.as_view()),
+    path('auth/email/verify', session_views.VerifyEmailView.as_view()),
+    path('auth/email/resend', session_views.ResendVerificationView.as_view()),
     path('auth/password/forgot', session_views.PasswordForgotView.as_view()),
     path('auth/password/reset', session_views.PasswordResetView.as_view()),
     path('auth/password/change', session_views.PasswordChangeView.as_view()),

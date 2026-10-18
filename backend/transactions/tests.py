@@ -15,6 +15,7 @@ def creer_utilisateur(email, role, phone=''):
     user = User.objects.create_user(username=email, email=email, password='x', first_name=email.split('@')[0])
     user.account_profile.role = role
     user.account_profile.phone_number = phone
+    user.account_profile.email_verified = True
     user.account_profile.save()
     return user
 

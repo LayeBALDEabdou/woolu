@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.db import IntegrityError, transaction
 from rest_framework import serializers
-from rest_framework.exceptions import AuthenticationFailed
+from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from .models import Role
@@ -109,6 +109,8 @@ class LoginSerializer(TokenObtainPairSerializer):
             data = super().validate(attrs)
         except AuthenticationFailed as error:
             raise AuthenticationFailed('Email ou mot de passe incorrect.') from error
+        if not self.user.account_profile.email_verified:
+            raise PermissionDenied("Confirmez votre adresse e-mail avant de vous connecter.")
         data['user'] = UserSerializer(self.user).data
         return data
 

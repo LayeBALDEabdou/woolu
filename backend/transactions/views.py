@@ -50,8 +50,12 @@ def exception_handler(exc, context):
 
 def claim_invitations(user):
     """Rattache au compte les demandes adressées à son email ou son téléphone avant son inscription."""
+    profile = getattr(user, 'account_profile', None)
+    # Sans email confirmé, n'importe qui pourrait s'inscrire avec l'adresse d'un autre
+    if not profile or not profile.email_verified:
+        return
     match = Q(client_email__iexact=user.email) if user.email else Q(pk__in=[])
-    phone = normalize_phone(getattr(getattr(user, 'account_profile', None), 'phone_number', ''))
+    phone = normalize_phone(profile.phone_number)
     if phone:
         match |= Q(client_phone_key=phone)
     Transaction.objects.filter(match, client__isnull=True).exclude(merchant=user).update(client=user)
