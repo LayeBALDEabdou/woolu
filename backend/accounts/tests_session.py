@@ -121,7 +121,7 @@ class SessionAuthTests(APITestCase):
 
     def test_erreurs_d_inscription_par_champ(self):
         self.register()
-        r = self.register()
+        r = self.register(email=' AWA@Test.com ')
         self.assertEqual(r.data['code'], 'VALIDATION')
         self.assertIn('email', r.data['fieldErrors'])
         self.assertIn('password', self.register(email='b@test.com', password='123').data['fieldErrors'])

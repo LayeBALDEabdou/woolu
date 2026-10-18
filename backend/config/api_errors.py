@@ -38,10 +38,3 @@ def exception_handler(exc, context):
     if isinstance(exc, exceptions.APIException):
         return error('SERVER', str(exc.detail), exc.status_code)
     return None
-
-
-class ApiErrorsMixin:
-    """À mettre sur une APIView pour qu'elle réponde dans ce format."""
-
-    def get_exception_handler(self):
-        return exception_handler

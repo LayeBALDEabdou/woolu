@@ -17,10 +17,6 @@ def erreur(description):
     }
 
 
-def erreur_drf(description):
-    return reponse(description, {"$ref": "#/components/schemas/ErreurDrf"})
-
-
 def reponse(description, schema):
     return {"description": description, "content": {"application/json": {"schema": schema}}}
 
@@ -31,7 +27,6 @@ def corps(schema):
 
 ERREUR_API = reponse("Erreur", {"$ref": "#/components/schemas/ErreurApi"})
 
-JETON_REFRESH = {"type": "object", "required": ["refresh"], "properties": {"refresh": {"type": "string"}}}
 
 
 SCHEMA = {
@@ -40,21 +35,20 @@ SCHEMA = {
         "title": "API Wóolu",
         "version": "1.0.0",
         "description": (
-            "Comptes utilisateurs (JWT) et réception / envoi d'USDC via Bitnob. "
-            "Pour les routes protégées : se connecter avec `/api/auth/login/`, puis coller le jeton "
-            "`access` dans « Authorize »."
+            "Comptes, transactions sous séquestre et réception / envoi d'USDC via Bitnob. "
+            "Pour les routes protégées : se connecter avec `/api/auth/login` sur cette page, "
+            "le cookie de session et le jeton CSRF sont ensuite envoyés automatiquement."
         ),
     },
     "servers": [{"url": "/"}],
     "tags": [
         {
-            "name": "Session",
+            "name": "Authentification",
             "description": (
-                "Connexion du frontend par cookie de session httpOnly. Les requêtes POST / PATCH d'un "
+                "Connexion par cookie de session httpOnly. Les requêtes POST / PATCH d'un "
                 "utilisateur connecté doivent porter l'en-tête `X-CSRFToken` (valeur du cookie `csrftoken`)."
             ),
         },
-        {"name": "Authentification", "description": "Comptes et jetons JWT (access 15 min, refresh 7 jours)"},
         {
             "name": "Transactions",
             "description": (
@@ -70,148 +64,6 @@ SCHEMA = {
         {"name": "Admin", "description": "Réservé aux administrateurs en production"},
     ],
     "paths": {
-        "/api/auth/register/": {
-            "post": {
-                "tags": ["Authentification"],
-                "summary": "Créer un compte",
-                "description": "Limité à 10 inscriptions par heure. Le rôle `admin` ne peut pas être choisi.",
-                "security": [],
-                "requestBody": corps(
-                    {
-                        "type": "object",
-                        "required": ["email", "password", "role"],
-                        "properties": {
-                            "email": {"type": "string", "format": "email"},
-                            "password": {"type": "string", "format": "password"},
-                            "first_name": {"type": "string", "maxLength": 150},
-                            "last_name": {"type": "string", "maxLength": 150},
-                            "phone_number": {"type": "string", "pattern": "^\\+?[0-9]{8,15}$", "example": "+221771234567"},
-                            "role": {"type": "string", "enum": ["client", "vendeur", "prestataire"]},
-                        },
-                    }
-                ),
-                "responses": {
-                    "201": reponse("Compte créé", {"$ref": "#/components/schemas/Utilisateur"}),
-                    "400": erreur_drf("Email déjà utilisé, mot de passe trop faible ou champ invalide"),
-                    "429": erreur_drf("Trop de tentatives"),
-                },
-            }
-        },
-        "/api/auth/login/": {
-            "post": {
-                "tags": ["Authentification"],
-                "summary": "Se connecter",
-                "description": "Limité à 20 tentatives par minute. Le jeton `access` contient aussi le rôle.",
-                "security": [],
-                "requestBody": corps(
-                    {
-                        "type": "object",
-                        "required": ["email", "password"],
-                        "properties": {
-                            "email": {"type": "string", "format": "email"},
-                            "password": {"type": "string", "format": "password"},
-                        },
-                    }
-                ),
-                "responses": {
-                    "200": reponse(
-                        "Connecté",
-                        {
-                            "type": "object",
-                            "properties": {
-                                "access": {"type": "string"},
-                                "refresh": {"type": "string"},
-                                "user": {"$ref": "#/components/schemas/Utilisateur"},
-                            },
-                        },
-                    ),
-                    "401": erreur_drf("Email ou mot de passe incorrect"),
-                    "429": erreur_drf("Trop de tentatives"),
-                },
-            }
-        },
-        "/api/auth/refresh/": {
-            "post": {
-                "tags": ["Authentification"],
-                "summary": "Renouveler le jeton access",
-                "description": "Renvoie aussi un nouveau `refresh` : l'ancien est révoqué.",
-                "security": [],
-                "requestBody": corps(JETON_REFRESH),
-                "responses": {
-                    "200": reponse(
-                        "Jetons renouvelés",
-                        {"type": "object", "properties": {"access": {"type": "string"}, "refresh": {"type": "string"}}},
-                    ),
-                    "401": erreur_drf("Jeton invalide, expiré ou révoqué"),
-                },
-            }
-        },
-        "/api/auth/logout/": {
-            "post": {
-                "tags": ["Authentification"],
-                "summary": "Se déconnecter",
-                "description": "Révoque le jeton `refresh`, qui doit appartenir au compte connecté.",
-                "requestBody": corps(JETON_REFRESH),
-                "responses": {
-                    "204": {"description": "Déconnecté"},
-                    "400": erreur_drf("Jeton invalide ou déjà révoqué"),
-                    "401": erreur_drf("Non connecté"),
-                    "403": erreur_drf("Ce jeton ne correspond pas à votre compte"),
-                },
-            }
-        },
-        "/api/auth/me/": {
-            "get": {
-                "tags": ["Authentification"],
-                "summary": "Mon profil",
-                "responses": {
-                    "200": reponse("Profil", {"$ref": "#/components/schemas/Utilisateur"}),
-                    "401": erreur_drf("Non connecté"),
-                },
-            },
-            "patch": {
-                "tags": ["Authentification"],
-                "summary": "Modifier mon profil",
-                "description": "L'email et le rôle ne sont pas modifiables.",
-                "requestBody": corps(
-                    {
-                        "type": "object",
-                        "properties": {
-                            "first_name": {"type": "string", "maxLength": 150},
-                            "last_name": {"type": "string", "maxLength": 150},
-                            "phone_number": {"type": "string", "pattern": "^\\+?[0-9]{8,15}$"},
-                        },
-                    }
-                ),
-                "responses": {
-                    "200": reponse("Profil modifié", {"$ref": "#/components/schemas/Utilisateur"}),
-                    "400": erreur_drf("Champ invalide"),
-                    "401": erreur_drf("Non connecté"),
-                },
-            },
-        },
-        "/api/auth/change-password/": {
-            "post": {
-                "tags": ["Authentification"],
-                "summary": "Changer de mot de passe",
-                "description": "Révoque tous les jetons refresh du compte : il faut se reconnecter.",
-                "requestBody": corps(
-                    {
-                        "type": "object",
-                        "required": ["old_password", "new_password"],
-                        "properties": {
-                            "old_password": {"type": "string", "format": "password"},
-                            "new_password": {"type": "string", "format": "password"},
-                        },
-                    }
-                ),
-                "responses": {
-                    "200": reponse("Mot de passe modifié", {"$ref": "#/components/schemas/ErreurDrf"}),
-                    "400": erreur_drf("Ancien mot de passe incorrect ou nouveau trop faible"),
-                    "401": erreur_drf("Non connecté"),
-                },
-            }
-        },
         "/payments/adresses/": {
             "post": {
                 "tags": ["Dépôts"],
@@ -371,10 +223,15 @@ SCHEMA = {
             }
         },
     },
-    "security": [{"jwt": []}],
+    "security": [{"session": []}],
     "components": {
         "securitySchemes": {
-            "jwt": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT", "description": "Jeton `access` de /api/auth/login/"}
+            "session": {
+                "type": "apiKey",
+                "in": "cookie",
+                "name": "sessionid",
+                "description": "Cookie posé par /api/auth/login (rien à saisir : le navigateur l'envoie)",
+            }
         },
         "schemas": {
             "Transaction": {
@@ -467,24 +324,6 @@ SCHEMA = {
                     "fieldErrors": {"type": "object", "additionalProperties": {"type": "string"}},
                 },
             },
-            "Utilisateur": {
-                "type": "object",
-                "properties": {
-                    "id": {"type": "integer"},
-                    "email": {"type": "string", "format": "email"},
-                    "first_name": {"type": "string"},
-                    "last_name": {"type": "string"},
-                    "phone_number": {"type": "string"},
-                    "role": {"type": "string", "enum": ["client", "vendeur", "prestataire", "admin"]},
-                    "date_joined": {"type": "string", "format": "date-time"},
-                },
-            },
-            "ErreurDrf": {
-                "type": "object",
-                "description": "`detail` pour une erreur générale, sinon une liste de messages par champ",
-                "properties": {"detail": {"type": "string"}},
-                "additionalProperties": {"type": "array", "items": {"type": "string"}},
-            },
             "Reseau": {"type": "string", "enum": list(RESEAUX_USDC), "example": "solana"},
             "AdresseDepot": {
                 "type": "object",
@@ -544,20 +383,13 @@ ACTIONS_TRANSACTION = {
 }
 
 SESSION = {"$ref": "#/components/schemas/Session"}
-UTILISATEUR_FRONT = {"$ref": "#/components/schemas/UtilisateurFrontend"}
-PUBLIC = {"security": [], "tags": ["Session"]}
+UTILISATEUR_FRONT = {"$ref": "#/components/schemas/Utilisateur"}
+PUBLIC = {"security": [], "tags": ["Authentification"]}
 MOT_DE_PASSE = {"type": "string", "format": "password"}
 
-SCHEMA["security"] = [{"jwt": []}, {"session": []}]
-SCHEMA["components"]["securitySchemes"]["session"] = {
-    "type": "apiKey",
-    "in": "cookie",
-    "name": "sessionid",
-    "description": "Cookie posé par /api/auth/login",
-}
 SCHEMA["components"]["schemas"].update(
     {
-        "UtilisateurFrontend": {
+        "Utilisateur": {
             "type": "object",
             "properties": {
                 "id": {"type": "string"},
@@ -579,7 +411,7 @@ SCHEMA["paths"].update(
     {
         "/api/auth/session": {
             "get": {
-                "tags": ["Session"],
+                "tags": ["Authentification"],
                 "summary": "Session courante",
                 "description": "Pose aussi le cookie `csrftoken`.",
                 "security": [],
@@ -642,7 +474,7 @@ SCHEMA["paths"].update(
         },
         "/api/auth/logout": {
             "post": {
-                "tags": ["Session"],
+                "tags": ["Authentification"],
                 "summary": "Se déconnecter",
                 "security": [],
                 "responses": {"204": {"description": "Déconnecté"}},
@@ -697,9 +529,9 @@ SCHEMA["paths"].update(
         },
         "/api/auth/password/change": {
             "post": {
-                "tags": ["Session"],
+                "tags": ["Authentification"],
                 "summary": "Changer de mot de passe",
-                "description": "La session courante reste ouverte ; les autres sessions et les jetons JWT sont révoqués.",
+                "description": "La session courante reste ouverte ; les autres sessions sont fermées.",
                 "requestBody": corps(
                     {
                         "type": "object",
@@ -712,7 +544,7 @@ SCHEMA["paths"].update(
         },
         "/api/auth/me": {
             "patch": {
-                "tags": ["Session"],
+                "tags": ["Authentification"],
                 "summary": "Modifier mon profil",
                 "requestBody": corps(
                     {"type": "object", "properties": {"fullName": {"type": "string"}, "phone": {"type": ["string", "null"]}}}
@@ -896,6 +728,17 @@ def docs(request):
 <body>
   <div id="swagger-ui"></div>
   <script src="{SWAGGER_UI}/swagger-ui-bundle.js"></script>
-  <script>SwaggerUIBundle({{ url: "/api/schema/", dom_id: "#swagger-ui" }})</script>
+  <script>
+    // Ajoute le jeton CSRF aux requêtes, comme le frontend
+    const csrf = () => (document.cookie.match(/(?:^|; )csrftoken=([^;]*)/) || [])[1]
+    SwaggerUIBundle({{
+      url: "/api/schema/",
+      dom_id: "#swagger-ui",
+      requestInterceptor: (req) => {{
+        if (csrf()) req.headers["X-CSRFToken"] = decodeURIComponent(csrf())
+        return req
+      }},
+    }})
+  </script>
 </body>
 </html>""")
