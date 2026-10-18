@@ -19,7 +19,7 @@ const FAQ = [
   },
   {
     q: "Quels moyens de paiement sont acceptés ?",
-    a: "Le paiement par Bitcoin Lightning via Bitnob est en cours d'intégration. Les paiements Mobile Money ne sont pas disponibles à ce jour.",
+    a: "Les paiements de transaction sont reçus en USDC sur le réseau Solana via Bitnob. Les paiements Mobile Money ne sont pas disponibles à ce jour.",
   },
   {
     q: "Combien coûte Wóolu ?",

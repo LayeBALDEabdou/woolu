@@ -33,9 +33,7 @@ import { ApiError } from "@/lib/api/errors"
 import { formatMoney, sumMoney } from "@/lib/formatters/money"
 import type { Paginated } from "@/types/common"
 import type { DemoState } from "./store"
-import { DAY, MINUTE, demoId, fakeXofToSats, normalizePhone, normalizeText } from "./utils"
-
-const INVOICE_TTL_MS = 15 * MINUTE
+import { DAY, demoId, fakeXofToUsdc, normalizePhone, normalizeText } from "./utils"
 
 // ─── Accès et contrôles ─────────────────────────────────────────────────────
 
@@ -406,15 +404,6 @@ export function getDashboardSummary(state: DemoState): DashboardSummary {
 
 // ─── Paiements ──────────────────────────────────────────────────────────────
 
-/** Expire côté « serveur » les factures dont l'échéance est dépassée. */
-function expireOverdueInvoices(state: DemoState, now: number): void {
-  for (const attempt of state.payments) {
-    if (attempt.status === "pending" && attempt.invoice && new Date(attempt.invoice.expiresAt).getTime() <= now) {
-      markAttemptExpired(state, attempt, now)
-    }
-  }
-}
-
 function markAttemptExpired(state: DemoState, attempt: PaymentAttempt, now: number): void {
   attempt.status = "expired"
   attempt.updatedAt = new Date(now).toISOString()
@@ -425,24 +414,21 @@ function markAttemptExpired(state: DemoState, attempt: PaymentAttempt, now: numb
   }
 }
 
-export function listPaymentsForTransaction(state: DemoState, transactionId: string, now: number): PaymentAttempt[] {
+export function listPaymentsForTransaction(state: DemoState, transactionId: string, _now: number): PaymentAttempt[] {
   findTransaction(state, requireUser(state), transactionId)
-  expireOverdueInvoices(state, now)
   return state.payments
     .filter((p) => p.transactionId === transactionId)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 }
 
-export function listPaymentHistory(state: DemoState, now: number): PaymentAttempt[] {
+export function listPaymentHistory(state: DemoState, _now: number): PaymentAttempt[] {
   const user = requireUser(state)
-  expireOverdueInvoices(state, now)
   const mine = new Set(state.transactions.filter((t) => isVisibleTo(t, user.id)).map((t) => t.id))
   return state.payments.filter((p) => mine.has(p.transactionId)).sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 }
 
-export function getPaymentAttempt(state: DemoState, attemptId: string, now: number): PaymentAttempt {
+export function getPaymentAttempt(state: DemoState, attemptId: string, _now: number): PaymentAttempt {
   const user = requireUser(state)
-  expireOverdueInvoices(state, now)
   const attempt = state.payments.find((p) => p.id === attemptId)
   if (!attempt) throw new ApiError("NOT_FOUND", "Paiement introuvable.")
   findTransaction(state, user, attempt.transactionId)
@@ -458,9 +444,8 @@ export function initiatePayment(
   const user = requireUser(state)
   const transaction = findTransaction(state, user, transactionId)
   assertAction(transaction, user, "pay")
-  expireOverdueInvoices(state, now)
   if (state.payments.some((p) => p.transactionId === transactionId && p.status === "pending")) {
-    throw new ApiError("CONFLICT", "Une facture est déjà en attente de paiement pour cette transaction.")
+    throw new ApiError("CONFLICT", "Une adresse de paiement est déjà active pour cette transaction.")
   }
   const id = demoId("pay")
   const nowIso = new Date(now).toISOString()
@@ -472,11 +457,13 @@ export function initiatePayment(
     method,
     status: "pending",
     amount: transaction.amount,
-    invoice: {
-      // Chaîne volontairement invalide : elle ne peut pas être payée par un vrai portefeuille.
-      paymentRequest: `WOOLU-DEMO-FACTURE-FICTIVE-${id.toUpperCase()}`,
-      amountSats: fakeXofToSats(transaction.amount.amount),
-      expiresAt: new Date(now + INVOICE_TTL_MS).toISOString(),
+    deposit: {
+      // Adresse volontairement invalide : elle ne doit jamais servir à un vrai transfert.
+      address: `WOOLU-DEMO-ADRESSE-${id.toUpperCase()}`,
+      network: "solana",
+      amountUsdc: fakeXofToUsdc(transaction.amount.amount),
+      receivedUsdc: "0.000000",
+      reference: id,
     },
     createdAt: nowIso,
     updatedAt: nowIso,

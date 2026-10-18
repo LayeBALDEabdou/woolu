@@ -17,7 +17,7 @@ const RULES = [
     title: "Mécanisme de paiement",
     points: [
       "Le paiement n'est possible qu'après acceptation des conditions par le client et par le vendeur.",
-      "La facture de paiement est générée par le serveur Wóolu auprès du prestataire de paiement (Bitnob, intégration en préparation). Elle a une durée de validité limitée : une facture expirée ne peut plus être payée et doit être régénérée.",
+      "L’adresse de dépôt USDC sur Solana et le montant exact sont générés par le serveur Wóolu auprès de Bitnob. Un paiement n’est reconnu qu’après vérification du dépôt par webhook.",
       "Un paiement n'est considéré comme reçu qu'après vérification par le serveur. L'application n'affiche jamais « fonds bloqués » avant cette confirmation.",
       "Aucune clé d'accès au prestataire de paiement ne transite par votre navigateur ou votre téléphone.",
     ],

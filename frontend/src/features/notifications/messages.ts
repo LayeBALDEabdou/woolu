@@ -37,8 +37,8 @@ const fr: Record<NotificationType, Template> = {
     body: `Le paiement de la transaction${ref(p)} n'a pas abouti. Vous pouvez générer une nouvelle facture.`,
   }),
   payment_expired: (p) => ({
-    title: "Facture expirée",
-    body: `La facture de paiement de la transaction${ref(p)} a expiré sans paiement.`,
+    title: "Adresse de paiement expirée",
+    body: `La demande de paiement de la transaction${ref(p)} a expiré sans paiement.`,
   }),
   delivery_started: (p) => ({
     title: "Livraison démarrée",

@@ -1,7 +1,7 @@
 import type { TransactionSummary } from "@/features/transactions/types"
 import type { PaymentAttempt } from "./types"
 
-/** Tentative encore en cours (facture émise, non expirée côté serveur). */
+/** Tentative encore en cours (adresse de dépôt créée, paiement non confirmé). */
 export function findPendingAttempt(attempts: PaymentAttempt[]): PaymentAttempt | undefined {
   return attempts.find((attempt) => attempt.status === "pending")
 }

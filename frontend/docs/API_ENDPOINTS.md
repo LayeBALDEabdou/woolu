@@ -1,9 +1,8 @@
 # Contrat d'API attendu par le frontend
 
 Ce document liste les endpoints que le frontend appelle en mode `api`
-(`NEXT_PUBLIC_APP_MODE=api`). L'**authentification** est implémentée dans `backend/accounts` et
-branchée ; les transactions sont en cours dans `backend/transactions`. Le reste est le contrat à
-implémenter ou à négocier avec l'équipe backend.
+(`NEXT_PUBLIC_APP_MODE=api`). L'authentification, les transactions et les notifications sont
+implémentées respectivement dans `backend/accounts`, `backend/transactions` et `backend/notifications`.
 
 Les implémentations HTTP correspondantes se trouvent dans `src/features/*/services/*-service.ts`.
 Les types TypeScript des requêtes et réponses sont dans `src/features/*/types.ts` et font foi.
@@ -74,31 +73,31 @@ Le backend doit :
   et répondre `INVALID_TRANSITION` sinon ;
 - enregistrer chaque étape dans `events` (historique affiché tel quel).
 
-## Paiements (Bitnob)
+## Paiements USDC (Bitnob)
 
 | Méthode | Chemin | Corps | Réponse |
 | --- | --- | --- | --- |
 | GET | `/api/transactions/{id}/payments` | — | `PaymentAttempt[]` (plus récente d'abord) |
-| POST | `/api/transactions/{id}/payments` | `{ method: "lightning" }` | `PaymentAttempt` (statut `pending`, avec `invoice`) |
+| POST | `/api/transactions/{id}/payments` | `{ method: "usdc" }` | `PaymentAttempt` (statut `pending`, avec `deposit`) |
 | GET | `/api/payments/{attemptId}` | — | `PaymentAttempt` |
 | GET | `/api/payments` | — | `PaymentAttempt[]` de l'utilisateur |
 
 Responsabilités **exclusivement backend** (rien de tout cela n'est fait dans le navigateur) :
 
-1. Appeler l'API Bitnob avec les clés secrètes pour créer la facture Lightning, puis renseigner
-   `invoice.paymentRequest`, `invoice.amountSats` (conversion XOF → sats) et `invoice.expiresAt`.
-2. Recevoir le webhook Bitnob (ex. `POST /api/webhooks/bitnob`), **vérifier sa signature**,
-   puis passer la tentative en `confirmed` ou `failed`.
-3. Après confirmation : passer la transaction en `payment_confirmed` et, une fois les fonds
-   effectivement sécurisés, `escrow = { status: "held", updatedAt }`. Le frontend n'affiche
-   « Fonds bloqués » **que** dans ce cas.
-4. Marquer `expired` les factures échues, et refuser une nouvelle facture tant qu'une autre est `pending` (409).
-5. Libérer ou rembourser les fonds (`escrow.status` = `released` / `refunded`).
+1. Exiger `BITNOB_CLIENT_ID`, `BITNOB_CLIENT_SECRET` et le taux serveur positif
+   `BITNOB_XOF_PER_USDC` (nombre de XOF pour 1 USDC), maintenu depuis une source de change validée.
+2. Créer auprès de Bitnob une adresse de dépôt USDC sur Solana et renvoyer `deposit.address`,
+   `deposit.network` et `deposit.amountUsdc`. Le client envoie le montant exact depuis un
+   portefeuille compatible ; une adresse `pending` ne peut pas être remplacée.
+3. Recevoir `POST /payments/webhooks/bitnob/` et vérifier la signature sur le corps brut.
+4. Cumuler les dépôts USDC confirmés associés à l'adresse ou à la référence Bitnob. Un dépôt
+   partiel laisse la tentative en `pending`. À réception du montant total, la tentative passe en
+   `confirmed`, la transaction en `payment_confirmed` et le séquestre en `held`.
 
-`isSimulated` doit valoir `true` pour toute facture de bac à sable, afin que l'interface l'indique.
+`isSimulated` vaut `true` avec une clé Bitnob sandbox.
 
 Le frontend relit `GET /api/transactions/{id}/payments` toutes les 5 s tant qu'une tentative
-est `pending`. Un flux temps réel (SSE/WebSocket) pourra remplacer ce polling plus tard.
+est `pending`. `amount` conserve le montant XOF ; `deposit.amountUsdc` donne le montant à envoyer.
 
 ## Livraison
 
@@ -141,3 +140,10 @@ Une notification transporte un `type` et des `params` structurés (référence, 
 l'autre partie, montant formaté, statut) plutôt qu'un texte figé : le frontend compose le
 message dans la langue de l'utilisateur (`src/features/notifications/messages.ts`), ce qui
 prépare les langues locales et la restitution vocale.
+
+La notification `transaction_proposed` est créée lorsque le vendeur envoie explicitement la
+proposition (`POST /api/transactions/{id}/send`), et non lors de la création d'un brouillon. Elle
+est visible dans l'application du client si la transaction est liée à son compte. Pour une
+invitation sans compte client associé, aucun destinataire in-app n'est disponible. Les préférences
+de canaux sont enregistrées, mais seules les notifications in-app sont actuellement distribuées ;
+les e-mails, SMS et messages vocaux ne sont pas envoyés par ces endpoints.

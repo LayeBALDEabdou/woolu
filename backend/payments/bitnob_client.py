@@ -12,6 +12,7 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import time
 
@@ -26,6 +27,18 @@ class BitnobError(Exception):
         super().__init__(f"Bitnob a répondu {status} : {data}")
         self.status = status
         self.data = data
+
+
+def provider_error_code(data: object) -> str:
+    """Code d'erreur court fourni par Bitnob, sans journaliser sa réponse complète."""
+    if not isinstance(data, dict):
+        return "unknown"
+    error = data.get("error")
+    candidates = (data.get("code"), error.get("code") if isinstance(error, dict) else None)
+    for value in candidates:
+        if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", value):
+            return value
+    return "unknown"
 
 
 def _signed_headers(payload: str) -> dict:

@@ -33,7 +33,7 @@ export function normalizePhone(value: string): string {
   return digits.startsWith("221") ? digits.slice(3) : digits
 }
 
-/** Taux de conversion FICTIF utilisé uniquement pour afficher un montant en sats en démo. */
-export function fakeXofToSats(amountXof: number): number {
-  return Math.round((amountXof * 5) / 3)
+/** Taux de conversion FICTIF utilisé uniquement pour afficher un montant USDC en démo. */
+export function fakeXofToUsdc(amountXof: number): string {
+  return (amountXof / 600).toFixed(6)
 }

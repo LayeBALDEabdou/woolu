@@ -5,19 +5,19 @@ import { DEMO_USERS, createTestServices, renderWithProviders } from "@/tests/tes
 import { PaymentView } from "./payment-view"
 
 describe("PaymentView", () => {
-  it("génère une facture et reste en attente : aucun paiement n'est simulé par un clic", async () => {
+  it("crée une adresse et reste en attente : aucun paiement n'est simulé par un clic", async () => {
     const user = userEvent.setup()
     const { services, session } = await createTestServices(DEMO_USERS.aissatou)
     const initiateSpy = vi.spyOn(services.payments, "initiate")
     renderWithProviders(<PaymentView transactionId="trx_demo_03" />, { services, session })
 
-    // La facture précédente a expiré : l'interface le signale et propose d'en générer une nouvelle.
-    expect(await screen.findByText("La dernière facture a expiré")).toBeInTheDocument()
-    await user.click(screen.getByRole("button", { name: "Générer une nouvelle facture" }))
+    expect(await screen.findByText("La dernière demande de paiement a expiré")).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Créer une nouvelle adresse" }))
 
-    await waitFor(() => expect(initiateSpy).toHaveBeenCalledWith("trx_demo_03", "lightning"))
+    await waitFor(() => expect(initiateSpy).toHaveBeenCalledWith("trx_demo_03", "usdc"))
     expect(await screen.findByText(/En attente de la confirmation du paiement par le serveur/)).toBeInTheDocument()
-    expect(screen.getByText(/Facture fictive/)).toBeInTheDocument()
+    expect(screen.getByText(/Adresse fictive/)).toBeInTheDocument()
+    expect(screen.getByText("Adresse USDC · Solana")).toBeInTheDocument()
     expect(screen.queryByText("Paiement confirmé par le serveur")).not.toBeInTheDocument()
     expect(screen.queryByText("Fonds bloqués")).not.toBeInTheDocument()
 
@@ -35,8 +35,10 @@ describe("PaymentView", () => {
 
   it("affiche la confirmation et les fonds bloqués une fois le paiement confirmé par le serveur", async () => {
     const { services, session } = await createTestServices(DEMO_USERS.ibrahima)
+    const transactionSpy = vi.spyOn(services.transactions, "get")
     renderWithProviders(<PaymentView transactionId="trx_demo_04" />, { services, session })
     expect(await screen.findByText("Paiement confirmé par le serveur")).toBeInTheDocument()
     expect(screen.getByText("Fonds bloqués")).toBeInTheDocument()
+    await waitFor(() => expect(transactionSpy).toHaveBeenCalledTimes(2))
   })
 })

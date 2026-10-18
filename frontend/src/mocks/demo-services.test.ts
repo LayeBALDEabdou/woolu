@@ -53,7 +53,7 @@ describe("backend simulé : parcours complet", () => {
     expect(accepted.clientAcceptedAt).not.toBeNull()
 
     // Initier un paiement ne confirme rien : la transaction reste en attente, sans séquestre.
-    const attempt = await payments.initiate(created.id, "lightning")
+    const attempt = await payments.initiate(created.id, "usdc")
     expect(attempt.status).toBe("pending")
     expect(attempt.isSimulated).toBe(true)
     const afterInitiate = await transactions.get(created.id)
@@ -61,7 +61,7 @@ describe("backend simulé : parcours complet", () => {
     expect(afterInitiate.escrow.status).toBe("not_started")
 
     // Une seconde facture ne peut pas être émise tant que la première est en attente.
-    expect(await rejectionCode(payments.initiate(created.id, "lightning"))).toBe("CONFLICT")
+    expect(await rejectionCode(payments.initiate(created.id, "usdc"))).toBe("CONFLICT")
 
     // Seul l'événement serveur (webhook simulé) confirme le paiement et le séquestre.
     await demo!.confirmPayment(attempt.id)
@@ -136,11 +136,11 @@ describe("backend simulé : parcours complet", () => {
 
   it("une facture dont l'échéance est dépassée est expirée par le serveur", async () => {
     const { services } = await createTestServices(DEMO_USERS.aissatou)
-    const attempt = await services.payments.initiate("trx_demo_03", "lightning")
+    const attempt = await services.payments.initiate("trx_demo_03", "usdc")
     await services.demo!.expirePayment(attempt.id)
     expect((await services.payments.getAttempt(attempt.id)).status).toBe("expired")
     // Une nouvelle tentative est alors autorisée.
-    expect((await services.payments.initiate("trx_demo_03", "lightning")).status).toBe("pending")
+    expect((await services.payments.initiate("trx_demo_03", "usdc")).status).toBe("pending")
   })
 
   it("exige une session", async () => {
