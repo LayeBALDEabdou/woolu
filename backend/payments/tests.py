@@ -6,22 +6,104 @@ from unittest.mock import patch
 from django.test import TestCase, override_settings
 
 from . import bitnob_client as bn
-from .models import AdresseDepot, Commande, PaiementSortant, WebhookEvent
+from .models import AdresseDepot, EnvoiUsdc, WebhookEvent
 
 SECRET = "secret-de-test"
 WEBHOOK_URL = "/payments/webhooks/bitnob/"
+ADRESSE_SOL = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"
 
 
 def signer(body: bytes) -> str:
     return hmac.new(SECRET.encode(), body, hashlib.sha512).hexdigest()
 
 
+class AdresseDepotTests(TestCase):
+    def creer(self, reseau="solana"):
+        return self.client.post("/payments/adresses/", {"reseau": reseau}, content_type="application/json")
+
+    @patch.object(bn, "create_address", return_value={"id": "uuid-1", "address": ADRESSE_SOL, "chain": "solana"})
+    def test_creation(self, mock_adresse):
+        r = self.creer("Solana")
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.json()["adresse"], ADRESSE_SOL)
+        self.assertEqual(mock_adresse.call_args.args[0], "solana")
+        self.assertEqual(AdresseDepot.objects.get().bitnob_id, "uuid-1")
+
+    def test_reseau_inconnu(self):
+        self.assertEqual(self.creer("tron").status_code, 400)
+
+    @patch.object(bn, "create_address", return_value={"id": "uuid-1"})
+    def test_reponse_sans_adresse(self, _):
+        self.assertEqual(self.creer().status_code, 502)
+        self.assertEqual(AdresseDepot.objects.count(), 0)
+
+    @patch.object(bn, "create_address", side_effect=bn.BitnobError(400, {"detail": "chain not supported"}))
+    def test_erreur_bitnob(self, _):
+        r = self.creer()
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json()["erreur"]["detail"], "chain not supported")
+
+    def test_statut(self):
+        AdresseDepot.objects.create(reference="adr-1", reseau="solana", adresse=ADRESSE_SOL)
+        r = self.client.get("/payments/adresses/adr-1/")
+        self.assertEqual(r.json()["statut"], AdresseDepot.Statut.EN_ATTENTE)
+        self.assertEqual(self.client.get("/payments/adresses/inconnue/").status_code, 404)
+
+
+@override_settings(DEBUG=True)
+class EnvoiUsdcTests(TestCase):
+    def envoyer(self, **champs):
+        payload = {"adresse": ADRESSE_SOL, "reseau": "solana", "montant": "1.5", "reference": "pay-0b8f6c2e-1a2b", **champs}
+        return self.client.post("/payments/envois/", payload, content_type="application/json")
+
+    @patch.object(bn, "withdraw", return_value={"success": True, "data": {"status": "pending"}})
+    def test_envoi(self, mock_withdraw):
+        r = self.envoyer(montant="1,5")
+        self.assertEqual(r.status_code, 201)
+        mock_withdraw.assert_called_once_with(ADRESSE_SOL, "1500000", "USDC", "solana", "pay-0b8f6c2e-1a2b")
+        envoi = EnvoiUsdc.objects.get()
+        self.assertEqual((envoi.reseau, envoi.montant, envoi.statut), ("solana", "1.5", "pending"))
+
+    @patch.object(bn, "withdraw")
+    def test_montants_invalides(self, mock_withdraw):
+        for montant in ("0", "-1", "abc", "0.0000001", "NaN"):
+            self.assertEqual(self.envoyer(montant=montant).status_code, 400, montant)
+        mock_withdraw.assert_not_called()
+
+    @patch.object(bn, "withdraw")
+    def test_champs_invalides(self, mock_withdraw):
+        self.assertEqual(self.envoyer(adresse="pas une adresse").status_code, 400)
+        self.assertEqual(self.envoyer(reseau="tron").status_code, 400)
+        self.assertEqual(self.envoyer(reference="").status_code, 400)
+        mock_withdraw.assert_not_called()
+
+    @patch.object(bn, "withdraw", side_effect=bn.BitnobError(422, {"code": "INSUFFICIENT_FUNDS"}))
+    def test_solde_insuffisant(self, _):
+        self.assertEqual(self.envoyer().status_code, 422)
+        self.assertEqual(EnvoiUsdc.objects.get().statut, "failed")
+
+    @override_settings(DEBUG=False, BITNOB_PAIEMENTS_PUBLICS=False)
+    @patch.object(bn, "withdraw")
+    def test_desactive_en_production(self, mock_withdraw):
+        self.assertEqual(self.envoyer().status_code, 403)
+        mock_withdraw.assert_not_called()
+
+    @override_settings(DEBUG=False, BITNOB_PAIEMENTS_PUBLICS=True, BITNOB_CLIENT_SECRET="prd:sandbox_abc")
+    @patch.object(bn, "withdraw", return_value={"data": {"status": "pending"}})
+    def test_active_en_production_avec_cle_sandbox(self, _):
+        self.assertEqual(self.envoyer().status_code, 201)
+
+    @override_settings(DEBUG=False, BITNOB_PAIEMENTS_PUBLICS=True, BITNOB_CLIENT_SECRET="prd:live_abc")
+    @patch.object(bn, "withdraw")
+    def test_refuse_avec_vraie_cle(self, mock_withdraw):
+        self.assertEqual(self.envoyer().status_code, 403)
+        mock_withdraw.assert_not_called()
+
+
 @override_settings(BITNOB_WEBHOOK_SECRET=SECRET)
 class WebhookTests(TestCase):
     def setUp(self):
-        self.commande = Commande.objects.create(
-            reference="cmd-test", montant_sats=1000, description="Frigo"
-        )
+        self.depot = AdresseDepot.objects.create(reference="adr-1", reseau="solana", adresse=ADRESSE_SOL)
 
     def envoyer(self, payload, signature=None):
         body = json.dumps(payload).encode()
@@ -32,32 +114,44 @@ class WebhookTests(TestCase):
             headers={"x-bitnob-signature": signature or signer(body)},
         )
 
-    def test_paiement_marque_la_commande_payee(self):
-        r = self.envoyer({"event": "deposit.success", "event_id": "evt-1", "data": {"reference": "cmd-test"}})
-        self.assertEqual(r.status_code, 200)
-        self.commande.refresh_from_db()
-        self.assertEqual(self.commande.statut, Commande.Statut.PAYEE)
-        self.assertEqual(len(self.commande.code_livraison), 6)
+    def test_depot_reconnu_par_adresse(self):
+        self.envoyer({"event": "stablecoin.deposit.success", "event_id": "evt-1",
+                      "data": {"address": ADRESSE_SOL, "amount": "5.5", "currency": "USDC", "reference": "tx-1"}})
+        self.depot.refresh_from_db()
+        self.assertEqual((self.depot.statut, self.depot.montant, self.depot.devise), ("RECU", "5.5", "USDC"))
+
+    def test_depot_reconnu_par_reference(self):
+        self.envoyer({"event": "deposit.success", "event_id": "evt-2", "data": {"reference": "adr-1", "amount": 2}})
+        self.depot.refresh_from_db()
+        self.assertEqual(self.depot.statut, AdresseDepot.Statut.RECU)
+
+    def test_autre_adresse_ignoree(self):
+        self.envoyer({"event": "deposit.success", "event_id": "evt-3", "data": {"address": "Autre", "reference": "tx-9"}})
+        self.depot.refresh_from_db()
+        self.assertEqual(self.depot.statut, AdresseDepot.Statut.EN_ATTENTE)
+
+    def test_envoi_confirme(self):
+        EnvoiUsdc.objects.create(reference="pay-abc", adresse=ADRESSE_SOL, reseau="solana", montant="1")
+        self.envoyer({"event": "transfer.success", "event_id": "evt-4", "data": {"reference": "pay-abc", "hash": "0x1"}})
+        self.assertEqual(EnvoiUsdc.objects.get().statut, "completed")
 
     def test_signature_invalide_refusee(self):
-        r = self.envoyer({"event": "deposit.success", "data": {"reference": "cmd-test"}}, signature="faux")
+        r = self.envoyer({"event": "deposit.success", "data": {"address": ADRESSE_SOL}}, signature="faux")
         self.assertEqual(r.status_code, 401)
-        self.commande.refresh_from_db()
-        self.assertEqual(self.commande.statut, Commande.Statut.EN_ATTENTE)
+        self.depot.refresh_from_db()
+        self.assertEqual(self.depot.statut, AdresseDepot.Statut.EN_ATTENTE)
 
     @override_settings(BITNOB_WEBHOOK_SECRET="")
     def test_refuse_tout_si_secret_absent(self):
-        body = b'{"event":"deposit.success","data":{"reference":"cmd-test"}}'
+        body = b'{"event":"deposit.success"}'
         forge = hmac.new(b"", body, hashlib.sha512).hexdigest()
         self.assertFalse(bn.webhook_signature_is_valid(body, forge))
 
     def test_doublon_ignore(self):
-        payload = {"event": "deposit.success", "event_id": "evt-1", "data": {"reference": "cmd-test"}}
+        payload = {"event": "deposit.success", "event_id": "evt-5", "data": {"address": ADRESSE_SOL}}
         self.envoyer(payload)
-        code = Commande.objects.get().code_livraison
         self.envoyer(payload)
         self.assertEqual(WebhookEvent.objects.count(), 1)
-        self.assertEqual(Commande.objects.get().code_livraison, code)
 
     def test_sans_identifiant_ne_plante_pas(self):
         r = self.envoyer({"event": "deposit.success", "data": {}})
@@ -65,169 +159,7 @@ class WebhookTests(TestCase):
         self.assertEqual(WebhookEvent.objects.count(), 0)
 
 
-class CommandeTests(TestCase):
-    @patch.object(bn, "create_lightning_invoice", return_value={"request": "lnbc..."})
-    def test_creation(self, mock_facture):
-        r = self.client.post(
-            "/payments/commandes/",
-            {"montant_sats": 1000, "description": "Frigo"},
-            content_type="application/json",
-        )
-        self.assertEqual(r.status_code, 201)
-        self.assertEqual(Commande.objects.get().montant_sats, 1000)
-        self.assertEqual(r.json()["request"], "lnbc...")
-        mock_facture.assert_called_once()
-
-    @patch.object(bn, "create_lightning_invoice", return_value={"data": {"request": "lnbc...", "expires_at": "2026-10-18T00:00:00Z"}})
-    def test_creation_facture_sous_data(self, _):
-        r = self.client.post(
-            "/payments/commandes/", {"montant_sats": 1000}, content_type="application/json"
-        )
-        self.assertEqual(r.json()["request"], "lnbc...")
-        self.assertEqual(r.json()["expires_at"], "2026-10-18T00:00:00Z")
-
-    def test_statut(self):
-        Commande.objects.create(reference="cmd-abc", montant_sats=500, description="Frigo")
-        r = self.client.get("/payments/commandes/cmd-abc/")
-        self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json()["statut"], Commande.Statut.EN_ATTENTE)
-        self.assertIsNone(r.json()["code_livraison"])
-
-    def test_statut_introuvable(self):
-        self.assertEqual(self.client.get("/payments/commandes/inconnue/").status_code, 404)
-
-    def test_montant_invalide(self):
-        r = self.client.post(
-            "/payments/commandes/", {"montant_sats": "abc"}, content_type="application/json"
-        )
-        self.assertEqual(r.status_code, 400)
-        self.assertEqual(Commande.objects.count(), 0)
-
-    @patch.object(bn, "create_lightning_invoice", side_effect=bn.BitnobError(400, {"message": "non"}))
-    def test_erreur_bitnob(self, _):
-        r = self.client.post(
-            "/payments/commandes/", {"montant_sats": 1000}, content_type="application/json"
-        )
-        self.assertEqual(r.status_code, 400)
-        self.assertEqual(Commande.objects.get().statut, Commande.Statut.ERREUR)
-
+class WhoamiTests(TestCase):
     @override_settings(DEBUG=False)
-    def test_whoami_reserve_aux_admins(self):
+    def test_reserve_aux_admins(self):
         self.assertEqual(self.client.get("/payments/whoami/").status_code, 403)
-
-
-FACTURE = "lntb10u1ptest"
-
-
-@override_settings(DEBUG=True)
-class PayerFactureTests(TestCase):
-    def poster(self, url, payload):
-        return self.client.post(url, payload, content_type="application/json")
-
-    @patch.object(bn, "decode_invoice", return_value={"amount_sat": 1000, "description": "Frigo", "is_expired": False})
-    def test_decoder(self, mock_decode):
-        r = self.poster("/payments/factures/decoder/", {"request": "lightning:LNTB10U1PTEST"})
-        self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json()["montant_sats"], 1000)
-        mock_decode.assert_called_once_with(FACTURE)  # préfixe retiré, minuscules
-
-    def test_adresse_lightning_refusee(self):
-        r = self.poster("/payments/factures/decoder/", {"request": "alice@exemple.com"})
-        self.assertEqual(r.status_code, 400)
-
-    def test_texte_quelconque_refuse(self):
-        r = self.poster("/payments/factures/decoder/", {"request": "bonjour"})
-        self.assertEqual(r.status_code, 400)
-
-    @patch.object(bn, "pay_invoice", return_value={"success": True, "data": {"status": "paid", "amount_sat": "1000", "fee_sat": "1"}})
-    def test_payer(self, mock_pay):
-        r = self.poster("/payments/factures/payer/", {"request": FACTURE, "reference": "pay-0b8f6c2e-1a2b-4c3d-9e8f-123456789abc"})
-        self.assertEqual(r.status_code, 201)
-        paiement = PaiementSortant.objects.get()
-        self.assertEqual((paiement.statut, paiement.montant_sats), ("paid", 1000))
-        mock_pay.assert_called_once()
-
-    def test_reference_obligatoire(self):
-        r = self.poster("/payments/factures/payer/", {"request": FACTURE})
-        self.assertEqual(r.status_code, 400)
-        self.assertEqual(PaiementSortant.objects.count(), 0)
-
-    @patch.object(bn, "pay_invoice", side_effect=bn.BitnobError(400, {"detail": "insufficient balance"}))
-    def test_echec_enregistre(self, _):
-        r = self.poster("/payments/factures/payer/", {"request": FACTURE, "reference": "pay-0b8f6c2e-1a2b"})
-        self.assertEqual(r.status_code, 400)
-        self.assertEqual(PaiementSortant.objects.get().statut, "failed")
-
-    @override_settings(DEBUG=False)
-    @patch.object(bn, "pay_invoice")
-    def test_desactive_en_production(self, mock_pay):
-        r = self.poster("/payments/factures/payer/", {"request": FACTURE, "reference": "pay-0b8f6c2e-1a2b"})
-        self.assertEqual(r.status_code, 403)
-        mock_pay.assert_not_called()
-
-    @override_settings(DEBUG=False, BITNOB_PAIEMENTS_PUBLICS=True, BITNOB_CLIENT_SECRET="prd:sandbox_abc")
-    @patch.object(bn, "pay_invoice", return_value={"data": {"status": "paid", "amount_sat": "10"}})
-    def test_active_en_production_avec_cle_sandbox(self, mock_pay):
-        r = self.poster("/payments/factures/payer/", {"request": FACTURE, "reference": "pay-0b8f6c2e-1a2b"})
-        self.assertEqual(r.status_code, 201)
-
-    @override_settings(DEBUG=False, BITNOB_PAIEMENTS_PUBLICS=True, BITNOB_CLIENT_SECRET="prd:live_abc")
-    @patch.object(bn, "pay_invoice")
-    def test_refuse_avec_vraie_cle(self, mock_pay):
-        r = self.poster("/payments/factures/payer/", {"request": FACTURE, "reference": "pay-0b8f6c2e-1a2b"})
-        self.assertEqual(r.status_code, 403)
-        mock_pay.assert_not_called()
-
-
-class AdresseDepotTests(TestCase):
-    @patch.object(bn, "create_address", return_value={"id": "uuid-1", "address": "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU", "chain": "solana"})
-    def test_creation(self, mock_adresse):
-        r = self.client.post("/payments/adresses/", {"reseau": "Solana"}, content_type="application/json")
-        self.assertEqual(r.status_code, 201)
-        self.assertEqual(r.json()["adresse"], "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU")
-        self.assertEqual(mock_adresse.call_args.args[0], "solana")
-        self.assertEqual(AdresseDepot.objects.get().bitnob_id, "uuid-1")
-
-    def test_reseau_inconnu(self):
-        r = self.client.post("/payments/adresses/", {"reseau": "tron"}, content_type="application/json")
-        self.assertEqual(r.status_code, 400)
-
-    @patch.object(bn, "create_address", return_value={"id": "uuid-1"})
-    def test_reponse_sans_adresse(self, _):
-        r = self.client.post("/payments/adresses/", {"reseau": "solana"}, content_type="application/json")
-        self.assertEqual(r.status_code, 502)
-        self.assertEqual(AdresseDepot.objects.count(), 0)
-
-    def test_statut(self):
-        AdresseDepot.objects.create(reference="adr-1", reseau="solana", adresse="abc")
-        r = self.client.get("/payments/adresses/adr-1/")
-        self.assertEqual(r.json()["statut"], AdresseDepot.Statut.EN_ATTENTE)
-        self.assertEqual(self.client.get("/payments/adresses/inconnue/").status_code, 404)
-
-
-@override_settings(BITNOB_WEBHOOK_SECRET=SECRET)
-class WebhookDepotTests(TestCase):
-    def setUp(self):
-        self.depot = AdresseDepot.objects.create(reference="adr-1", reseau="solana", adresse="AdrSolana123")
-
-    def envoyer(self, payload):
-        body = json.dumps(payload).encode()
-        return self.client.post(
-            WEBHOOK_URL, body, content_type="application/json", headers={"x-bitnob-signature": signer(body)}
-        )
-
-    def test_depot_reconnu_par_adresse(self):
-        self.envoyer({"event": "stablecoin.deposit.success", "event_id": "evt-d1",
-                      "data": {"address": "AdrSolana123", "amount": "5.5", "currency": "USDC", "reference": "tx-1"}})
-        self.depot.refresh_from_db()
-        self.assertEqual((self.depot.statut, self.depot.montant, self.depot.devise), ("RECU", "5.5", "USDC"))
-
-    def test_depot_reconnu_par_reference(self):
-        self.envoyer({"event": "deposit.success", "event_id": "evt-d2", "data": {"reference": "adr-1", "amount": 2}})
-        self.depot.refresh_from_db()
-        self.assertEqual(self.depot.statut, AdresseDepot.Statut.RECU)
-
-    def test_autre_adresse_ignoree(self):
-        self.envoyer({"event": "deposit.success", "event_id": "evt-d3", "data": {"address": "Autre", "reference": "tx-9"}})
-        self.depot.refresh_from_db()
-        self.assertEqual(self.depot.statut, AdresseDepot.Statut.EN_ATTENTE)

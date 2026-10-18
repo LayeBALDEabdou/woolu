@@ -163,12 +163,6 @@ button.secondaire {
   text-align: center;
 }
 
-.code {
-  color: var(--text-h);
-  font-size: 20px;
-  letter-spacing: 2px;
-}
-
 .onglets {
   display: flex;
   gap: 4px;
@@ -226,27 +220,6 @@ button.secondaire {
   word-break: break-word;
 }
 
-.modes {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 18px;
-}
-
-.modes button {
-  flex: 1;
-  padding: 8px;
-  font-size: 14px;
-  color: var(--text);
-  background: transparent;
-  border: 1px solid var(--border);
-}
-
-.modes button[aria-checked='true'] {
-  color: var(--text-h);
-  border-color: var(--accent);
-  box-shadow: inset 0 0 0 1px var(--accent);
-}
-
 .avertissement {
   margin: 0;
   padding: 10px 12px;
@@ -254,4 +227,11 @@ button.secondaire {
   color: var(--text-h);
   background: rgba(247, 147, 26, 0.12);
   border-radius: 8px;
+}
+
+.details dd.adresse {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 500;
+  word-break: break-all;
 }

@@ -1,6 +1,6 @@
 # Woolu — frontend
 
-React + TypeScript + Vite. Formulaire de paiement Lightning via l'API Bitnob du backend.
+React + TypeScript + Vite. Réception et envoi d’USDC via l’API Bitnob du backend.
 
 ```bash
 npm install

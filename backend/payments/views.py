@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import uuid
+from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
 from django.db.models import Q
@@ -10,86 +11,48 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
 from . import bitnob_client as bn
-from .models import AdresseDepot, Commande, PaiementSortant, WebhookEvent
+from .models import AdresseDepot, EnvoiUsdc, WebhookEvent
 
 log = logging.getLogger(__name__)
+
+# Réseaux Bitnob acceptant l'USDC (la sandbox n'en propose qu'une partie)
+RESEAUX_USDC = ("solana", "polygon", "base", "ethereum", "avalanche", "optimism")
+FRAIS_ENVOI_USDC = "1"  # frais Bitnob par envoi, ajoutés au montant
+REFERENCE_ENVOI = re.compile(r"^pay-[0-9a-f-]{8,40}$")
+ADRESSE = re.compile(r"^[A-Za-z0-9]{20,128}$")
+
+
+def erreur(message, status=400):
+    return JsonResponse({"erreur": message}, status=status)
+
+
+def lire_json(request) -> dict | None:
+    try:
+        data = json.loads(request.body or "{}")
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def envois_autorises():
+    # Envoyer sort de l'argent du compte Bitnob : tant que l'app n'a pas de comptes
+    # utilisateurs, c'est limité au mode debug, ou à BITNOB_PAIEMENTS_PUBLICS avec
+    # une clé sandbox (se désactive tout seul avec une vraie clé)
+    if settings.DEBUG:
+        return True
+    return settings.BITNOB_PAIEMENTS_PUBLICS and "sandbox" in settings.BITNOB_CLIENT_SECRET
 
 
 @require_GET
 def whoami(request):
-    """Test : vérifie que tes clés API marchent. GET /payments/whoami/"""
+    """Vérifie que les clés API marchent. GET /payments/whoami/"""
     # En production, réservé aux admins : la réponse décrit le compte Bitnob
     if not (settings.DEBUG or request.user.is_staff):
-        return JsonResponse({"erreur": "Accès refusé"}, status=403)
+        return erreur("Accès refusé", 403)
     try:
         return JsonResponse(bn.whoami())
     except bn.BitnobError as e:
-        return JsonResponse({"erreur": e.data}, status=e.status)
-
-
-@csrf_exempt
-@require_POST
-def creer_commande(request):
-    """
-    Crée une commande + une facture Lightning Bitnob.
-    POST /payments/commandes/  {"montant_sats": 1000, "description": "Frigo"}
-    """
-    try:
-        data = json.loads(request.body or "{}")
-        montant_sats = int(data.get("montant_sats", 1000))
-    except (ValueError, TypeError, AttributeError):
-        return JsonResponse({"erreur": "JSON ou montant_sats invalide"}, status=400)
-    if montant_sats <= 0:
-        return JsonResponse({"erreur": "montant_sats doit être positif"}, status=400)
-
-    reference = f"cmd-{uuid.uuid4().hex[:12]}"
-    commande = Commande.objects.create(
-        reference=reference,
-        montant_sats=montant_sats,
-        description=str(data.get("description", "Commande test"))[:255],
-    )
-    try:
-        facture = bn.create_lightning_invoice(
-            commande.montant_sats, commande.description, reference
-        )
-    except bn.BitnobError as e:
-        commande.statut = Commande.Statut.ERREUR
-        commande.save()
-        return JsonResponse({"erreur": e.data}, status=e.status)
-
-    # Selon les endpoints, Bitnob renvoie la facture à la racine ou sous "data"
-    infos = facture.get("data", facture) if isinstance(facture, dict) else {}
-    return JsonResponse(
-        {
-            "reference": reference,
-            "statut": commande.statut,
-            "request": infos.get("request"),  # facture BOLT11 à payer
-            "expires_at": infos.get("expires_at"),
-            "facture": facture,
-        },
-        status=201,
-    )
-
-
-@require_GET
-def statut_commande(request, reference):
-    """Statut d'une commande, interrogé par le frontend. GET /payments/commandes/<reference>/"""
-    commande = Commande.objects.filter(reference=reference).first()
-    if not commande:
-        return JsonResponse({"erreur": "Commande introuvable"}, status=404)
-    return JsonResponse(
-        {
-            "reference": commande.reference,
-            "statut": commande.statut,
-            "montant_sats": commande.montant_sats,
-            "description": commande.description,
-            "code_livraison": commande.code_livraison or None,
-        }
-    )
-
-
-# Réseaux Bitnob acceptant l'USDC (la sandbox n'en propose qu'une partie)
-RESEAUX_USDC = ("solana", "polygon", "base", "ethereum", "avalanche", "optimism")
+        return erreur(e.data, e.status)
 
 
 @csrf_exempt
@@ -99,22 +62,22 @@ def creer_adresse(request):
     Génère une adresse de dépôt USDC. POST /payments/adresses/ {"reseau": "solana"}
     Pas de montant : l'adresse accepte n'importe quel dépôt.
     """
-    try:
-        reseau = str(json.loads(request.body or "{}").get("reseau", "")).lower()
-    except (ValueError, AttributeError):
-        return JsonResponse({"erreur": "JSON invalide"}, status=400)
+    data = lire_json(request)
+    if data is None:
+        return erreur("JSON invalide")
+    reseau = str(data.get("reseau", "")).lower()
     if reseau not in RESEAUX_USDC:
-        return JsonResponse({"erreur": f"Réseau non pris en charge : {', '.join(RESEAUX_USDC)}"}, status=400)
+        return erreur(f"Réseau non pris en charge : {', '.join(RESEAUX_USDC)}")
 
     reference = f"adr-{uuid.uuid4().hex[:12]}"
     try:
         reponse = bn.create_address(reseau, reference, label=f"Woolu {reference}")
     except bn.BitnobError as e:
-        return JsonResponse({"erreur": e.data}, status=e.status)
+        return erreur(e.data, e.status)
 
     infos = reponse.get("data", reponse)
     if not infos.get("address"):
-        return JsonResponse({"erreur": "Bitnob n'a pas renvoyé d'adresse"}, status=502)
+        return erreur("Bitnob n'a pas renvoyé d'adresse", 502)
     depot = AdresseDepot.objects.create(
         reference=reference,
         reseau=reseau,
@@ -132,7 +95,7 @@ def statut_adresse(request, reference):
     """Statut d'une adresse de dépôt, interrogé par le frontend. GET /payments/adresses/<reference>/"""
     depot = AdresseDepot.objects.filter(reference=reference).first()
     if not depot:
-        return JsonResponse({"erreur": "Adresse introuvable"}, status=404)
+        return erreur("Adresse introuvable", 404)
     return JsonResponse(
         {
             "reference": depot.reference,
@@ -145,101 +108,60 @@ def statut_adresse(request, reference):
     )
 
 
-REFERENCE_PAIEMENT = re.compile(r"^pay-[0-9a-f-]{8,40}$")
-
-
-def _lire_facture(request):
-    """Renvoie (facture, données JSON, None) ou (None, None, réponse d'erreur)."""
-    try:
-        data = json.loads(request.body or "{}")
-        brut = str(data.get("request", "")).strip()
-    except (ValueError, AttributeError):
-        return None, None, JsonResponse({"erreur": "JSON invalide"}, status=400)
-    facture = brut.lower().removeprefix("lightning:")
-    if "@" in facture:
-        return None, None, JsonResponse(
-            {"erreur": "Les adresses Lightning ne sont pas prises en charge : collez une facture (lntb… / lnbc…)."},
-            status=400,
-        )
-    if not facture.startswith("ln"):
-        return None, None, JsonResponse({"erreur": "Ce n'est pas une facture Lightning."}, status=400)
-    return facture, data, None
-
-
-def _paiements_sortants_autorises():
-    # Payer sort de l'argent du compte Bitnob : tant que l'app n'a pas de comptes
-    # utilisateurs, c'est limité au mode debug, ou à BITNOB_PAIEMENTS_PUBLICS avec
-    # une clé sandbox (se désactive tout seul avec une vraie clé)
-    if settings.DEBUG:
-        return True
-    return settings.BITNOB_PAIEMENTS_PUBLICS and "sandbox" in settings.BITNOB_CLIENT_SECRET
-
-
 @csrf_exempt
 @require_POST
-def decoder_facture(request):
-    """Montant et description d'une facture avant de la payer. POST /payments/factures/decoder/ {"request": "lntb..."}"""
-    if not _paiements_sortants_autorises():
-        return JsonResponse({"erreur": "Paiements désactivés en production."}, status=403)
-    facture, _, erreur = _lire_facture(request)
-    if erreur:
-        return erreur
-    try:
-        infos = bn.decode_invoice(facture)
-    except bn.BitnobError as e:
-        return JsonResponse({"erreur": e.data}, status=e.status)
-    infos = infos.get("data", infos)
-    return JsonResponse(
-        {
-            "request": facture,
-            "montant_sats": infos.get("amount_sat"),
-            "description": infos.get("description", ""),
-            "expires_at": infos.get("expires_at"),
-            "expiree": bool(infos.get("is_expired")),
-        }
-    )
-
-
-@csrf_exempt
-@require_POST
-def payer_facture(request):
+def envoyer_usdc(request):
     """
-    Paie une facture avec le solde Bitnob.
-    POST /payments/factures/payer/ {"request": "lntb...", "reference": "pay-<uuid>"}
-    La référence vient du frontend : un double clic ne paie qu'une fois.
+    Envoie des USDC depuis le solde Bitnob.
+    POST /payments/envois/ {"adresse": "...", "reseau": "solana", "montant": "1.5", "reference": "pay-<uuid>"}
+    La référence vient du frontend : un double clic n'envoie qu'une fois.
     """
-    if not _paiements_sortants_autorises():
-        return JsonResponse({"erreur": "Paiements désactivés en production."}, status=403)
-    facture, data, erreur = _lire_facture(request)
-    if erreur:
-        return erreur
+    if not envois_autorises():
+        return erreur("Envois désactivés en production.", 403)
+    data = lire_json(request)
+    if data is None:
+        return erreur("JSON invalide")
+    adresse = str(data.get("adresse", "")).strip()
+    reseau = str(data.get("reseau", "")).lower()
     reference = str(data.get("reference", ""))
-    if not REFERENCE_PAIEMENT.match(reference):
-        return JsonResponse({"erreur": "Référence de paiement invalide"}, status=400)
+    try:
+        montant = Decimal(str(data.get("montant", "")).replace(",", "."))
+    except InvalidOperation:
+        return erreur("Montant invalide")
 
-    paiement, _ = PaiementSortant.objects.get_or_create(
-        reference=reference, defaults={"facture": facture}
+    if reseau not in RESEAUX_USDC:
+        return erreur(f"Réseau non pris en charge : {', '.join(RESEAUX_USDC)}")
+    if not ADRESSE.match(adresse):
+        return erreur("Adresse invalide")
+    if not montant.is_finite() or montant <= 0 or montant.as_tuple().exponent < -6:
+        return erreur("Montant invalide (6 décimales au plus)")
+    if not REFERENCE_ENVOI.match(reference):
+        return erreur("Référence d'envoi invalide")
+
+    envoi, _ = EnvoiUsdc.objects.get_or_create(
+        reference=reference,
+        defaults={"adresse": adresse, "reseau": reseau, "montant": format(montant.normalize(), "f")},
     )
     try:
-        reponse = bn.pay_invoice(facture, reference)
+        # Plus petite unité : l'USDC a 6 décimales (1,5 USDC = "1500000")
+        reponse = bn.withdraw(adresse, str(int(montant * 1_000_000)), "USDC", reseau, reference)
     except bn.BitnobError as e:
-        paiement.statut = "failed"
-        paiement.reponse = {"erreur": e.data}
-        paiement.save()
-        return JsonResponse({"erreur": e.data}, status=e.status)
+        envoi.statut = "failed"
+        envoi.reponse = {"erreur": e.data}
+        envoi.save()
+        return erreur(e.data, e.status)
 
-    infos = reponse.get("data", reponse)
-    paiement.statut = infos.get("status", "pending")
-    paiement.montant_sats = int(infos["amount_sat"]) if str(infos.get("amount_sat", "")).isdigit() else None
-    paiement.reponse = reponse
-    paiement.save()
-    log.info("Paiement sortant %s : %s sats, %s", reference, paiement.montant_sats, paiement.statut)
+    envoi.statut = reponse.get("data", reponse).get("status", "pending")
+    envoi.reponse = reponse
+    envoi.save()
+    log.info("Envoi USDC %s : %s USDC sur %s, %s", reference, envoi.montant, reseau, envoi.statut)
     return JsonResponse(
         {
             "reference": reference,
-            "statut": paiement.statut,
-            "montant_sats": paiement.montant_sats,
-            "frais_sats": infos.get("fee_sat"),
+            "statut": envoi.statut,
+            "montant": envoi.montant,
+            "frais": FRAIS_ENVOI_USDC,
+            "reseau": reseau,
         },
         status=201,
     )
@@ -250,17 +172,14 @@ def payer_facture(request):
 def webhook_bitnob(request):
     """Reçoit les webhooks Bitnob. URL à donner à Bitnob : https://<domaine-api>/payments/webhooks/bitnob/"""
     # 1. Vérifier la signature sur le corps BRUT (request.body = octets reçus)
-    if not bn.webhook_signature_is_valid(
-        request.body, request.headers.get("x-bitnob-signature")
-    ):
+    if not bn.webhook_signature_is_valid(request.body, request.headers.get("x-bitnob-signature")):
         log.warning("Webhook Bitnob : signature invalide")
         return HttpResponse(status=401)
 
-    try:
-        payload = json.loads(request.body)
-    except ValueError:
+    payload = lire_json(request)
+    if payload is None:
         return HttpResponse(status=400)
-    event = payload.get("event")
+    event = payload.get("event") or ""
     data = payload.get("data", payload)  # certains événements mettent tout à la racine
     event_id = payload.get("event_id") or data.get("reference")
     if not event_id:
@@ -268,30 +187,13 @@ def webhook_bitnob(request):
         return HttpResponse(status=200)  # inutile que Bitnob réessaie
 
     # 2. Ignorer les doublons (Bitnob peut renvoyer le même événement)
-    _, cree = WebhookEvent.objects.get_or_create(
-        event_id=event_id, defaults={"event": event or "", "payload": payload}
-    )
+    _, cree = WebhookEvent.objects.get_or_create(event_id=event_id, defaults={"event": event, "payload": payload})
     if not cree:
         return HttpResponse(status=200)
 
-    # 3. Mettre à jour la commande
-    commande = Commande.objects.filter(reference=data.get("reference")).first()
-    if commande:
-        if event in ("transfer.success", "deposit.success"):
-            commande.statut = Commande.Statut.PAYEE
-            commande.generer_code()
-            log.info(
-                "Commande %s payée, code livraison %s",
-                commande.reference,
-                commande.code_livraison,
-            )
-        elif event == "payouts.withdrawal.success":
-            commande.statut = Commande.Statut.TERMINEE
-        commande.save()
-
-    # 4. Dépôt sur une adresse USDC : la doc ne fixe pas le nom de l'événement ni des
-    # champs, on reconnaît l'adresse ou notre référence (voir WebhookEvent dans l'admin)
-    if event and "deposit" in event and event.endswith("success"):
+    # 3. Dépôt reçu : la doc ne fixe ni le nom de l'événement ni les champs, on
+    # reconnaît l'adresse ou notre référence (voir WebhookEvent dans l'admin)
+    if "deposit" in event and event.endswith("success"):
         adresse = data.get("address") or data.get("to_address")
         depot = AdresseDepot.objects.filter(
             Q(reference=data.get("reference") or "") | Q(adresse=adresse or "-")
@@ -302,6 +204,10 @@ def webhook_bitnob(request):
             depot.devise = str(data.get("currency", ""))[:10]
             depot.save()
             log.info("Dépôt reçu sur %s : %s %s", depot.adresse, depot.montant, depot.devise)
+
+    # 4. Envoi confirmé sur la blockchain
+    if event == "transfer.success":
+        EnvoiUsdc.objects.filter(reference=data.get("reference") or "").update(statut="completed")
 
     # 5. Toujours répondre 200, sinon Bitnob réessaie
     return HttpResponse(status=200)

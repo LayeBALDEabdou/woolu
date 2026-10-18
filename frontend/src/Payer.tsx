@@ -1,56 +1,55 @@
 import { useCallback, useState } from 'react'
-import { decoderFacture, payerFacture, type FactureDecodee, type PaiementEffectue } from './api'
+import { envoyerUsdc, FRAIS_RETRAIT_USDC, RESEAUX_USDC, type EnvoiUsdc } from './api'
 import Scanner from './Scanner'
 
-function messageErreur(err: unknown) {
-  return err instanceof Error ? err.message : 'Erreur inattendue'
+function nomReseau(id: string) {
+  return RESEAUX_USDC.find((r) => r.id === id)?.nom ?? id
+}
+
+// Un QR code de portefeuille peut contenir "solana:<adresse>?amount=..." : on garde l'adresse
+function extraireAdresse(texte: string) {
+  return texte.trim().replace(/^[a-z]+:/i, '').split(/[?@/]/)[0]
 }
 
 function Payer() {
-  const [saisie, setSaisie] = useState('')
+  const [reseau, setReseau] = useState<string>(RESEAUX_USDC[0].id)
+  const [adresse, setAdresse] = useState('')
+  const [montant, setMontant] = useState('1')
   const [scan, setScan] = useState(false)
-  const [facture, setFacture] = useState<FactureDecodee | null>(null)
-  // Une référence par facture vérifiée : un double clic ne paie qu'une fois
+  const [confirmation, setConfirmation] = useState(false)
+  // Une référence par envoi confirmé : un double clic n'envoie qu'une fois
   const [reference, setReference] = useState('')
-  const [resultat, setResultat] = useState<PaiementEffectue | null>(null)
+  const [resultat, setResultat] = useState<EnvoiUsdc | null>(null)
   const [erreur, setErreur] = useState('')
-  const [chargement, setChargement] = useState(false)
-
-  async function verifier(texte: string) {
-    setErreur('')
-    setChargement(true)
-    try {
-      setFacture(await decoderFacture(texte))
-      setReference(`pay-${crypto.randomUUID()}`)
-    } catch (err) {
-      setErreur(messageErreur(err))
-    } finally {
-      setChargement(false)
-    }
-  }
+  const [envoi, setEnvoi] = useState(false)
 
   const onScan = useCallback((texte: string) => {
     setScan(false)
-    setSaisie(texte)
-    verifier(texte)
+    setAdresse(extraireAdresse(texte))
   }, [])
 
-  async function payer() {
-    if (!facture) return
+  function verifier(e: React.FormEvent) {
+    e.preventDefault()
     setErreur('')
-    setChargement(true)
+    setReference(`pay-${crypto.randomUUID()}`)
+    setConfirmation(true)
+  }
+
+  async function envoyer() {
+    setErreur('')
+    setEnvoi(true)
     try {
-      setResultat(await payerFacture(facture.request, reference))
+      setResultat(await envoyerUsdc(adresse, reseau, montant, reference))
     } catch (err) {
-      setErreur(messageErreur(err))
+      setErreur(err instanceof Error ? err.message : 'Erreur inattendue')
     } finally {
-      setChargement(false)
+      setEnvoi(false)
     }
   }
 
   function recommencer() {
-    setSaisie('')
-    setFacture(null)
+    setAdresse('')
+    setConfirmation(false)
     setResultat(null)
     setErreur('')
   }
@@ -59,57 +58,60 @@ function Payer() {
     return (
       <div className="paiement">
         {resultat.statut === 'failed' ? (
-          <p className="erreur">Le paiement a échoué.</p>
+          <p className="erreur">L'envoi a échoué.</p>
         ) : (
-          <p className="succes">{resultat.statut === 'paid' ? 'Facture payée ✓' : 'Paiement en cours…'}</p>
+          <p className="succes">{resultat.statut === 'completed' ? 'USDC envoyés ✓' : 'Envoi en cours…'}</p>
         )}
-        {resultat.montant_sats != null && (
-          <p className="discret">
-            {resultat.montant_sats} sats{resultat.frais_sats ? ` + ${resultat.frais_sats} sats de frais` : ''}
-          </p>
-        )}
-        <button onClick={recommencer}>Payer une autre facture</button>
+        <p className="discret">
+          {resultat.montant} USDC sur {nomReseau(resultat.reseau)} + {resultat.frais} USDC de frais
+        </p>
+        <button onClick={recommencer}>Nouvel envoi</button>
       </div>
     )
   }
 
-  if (facture) {
+  if (confirmation) {
+    const total = Number(montant.replace(',', '.')) + FRAIS_RETRAIT_USDC
     return (
       <div className="paiement">
         <dl className="details">
           <dt>Montant</dt>
-          <dd>{facture.montant_sats ?? '?'} sats</dd>
-          {facture.description && (
-            <>
-              <dt>Description</dt>
-              <dd>{facture.description}</dd>
-            </>
-          )}
+          <dd>{montant} USDC</dd>
+          <dt>Frais</dt>
+          <dd>{FRAIS_RETRAIT_USDC} USDC</dd>
+          <dt>Total</dt>
+          <dd>{Number.isFinite(total) ? total : '?'} USDC</dd>
+          <dt>Réseau</dt>
+          <dd>{nomReseau(reseau)}</dd>
+          <dt>Vers</dt>
+          <dd className="adresse">{adresse}</dd>
         </dl>
 
-        {facture.expiree ? (
-          <p className="erreur">Cette facture a expiré.</p>
-        ) : (
-          <button onClick={payer} disabled={chargement}>
-            {chargement ? 'Paiement…' : `Payer ${facture.montant_sats ?? ''} sats`}
-          </button>
-        )}
+        <button onClick={envoyer} disabled={envoi}>
+          {envoi ? 'Envoi…' : `Envoyer ${montant} USDC`}
+        </button>
         {erreur && <p className="erreur">{erreur}</p>}
-        <button className="secondaire" onClick={recommencer}>
-          Annuler
+        <button className="secondaire" onClick={() => setConfirmation(false)} disabled={envoi}>
+          Modifier
         </button>
       </div>
     )
   }
 
   return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault()
-        verifier(saisie)
-      }}
-    >
-      <p className="sous-titre">Scannez ou collez une facture Lightning.</p>
+    <form onSubmit={verifier}>
+      <p className="sous-titre">Envoyez des USDC depuis le solde Bitnob.</p>
+
+      <label>
+        Réseau
+        <select value={reseau} onChange={(e) => setReseau(e.target.value)}>
+          {RESEAUX_USDC.map((r) => (
+            <option key={r.id} value={r.id}>
+              {r.nom}
+            </option>
+          ))}
+        </select>
+      </label>
 
       {scan ? (
         <Scanner onScan={onScan} onFermer={() => setScan(false)} />
@@ -120,21 +122,31 @@ function Payer() {
       )}
 
       <label>
-        Facture
+        Adresse USDC
         <textarea
-          rows={3}
+          rows={2}
           required
-          placeholder="lntb… ou lnbc…"
-          value={saisie}
-          onChange={(e) => setSaisie(e.target.value)}
+          placeholder={`Adresse ${nomReseau(reseau)}`}
+          value={adresse}
+          onChange={(e) => setAdresse(e.target.value)}
         />
       </label>
 
-      {erreur && <p className="erreur">{erreur}</p>}
+      <label>
+        Montant (USDC)
+        <input
+          type="number"
+          min="0.000001"
+          step="0.000001"
+          required
+          value={montant}
+          onChange={(e) => setMontant(e.target.value)}
+        />
+      </label>
 
-      <button type="submit" disabled={chargement}>
-        {chargement ? 'Vérification…' : 'Vérifier la facture'}
-      </button>
+      <p className="discret">Frais Bitnob : {FRAIS_RETRAIT_USDC} USDC par envoi, en plus du montant.</p>
+
+      <button type="submit">Vérifier l'envoi</button>
     </form>
   )
 }
