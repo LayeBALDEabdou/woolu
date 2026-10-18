@@ -17,7 +17,7 @@ import type {
 } from "@/features/transactions/types"
 import { formatMoney, xof } from "@/lib/formatters/money"
 import type { DemoState } from "./store"
-import { DAY, HOUR, MINUTE, fakeXofToSats, isoAt } from "./utils"
+import { DAY, HOUR, MINUTE, fakeXofToUsdc, isoAt } from "./utils"
 
 export const DEMO_USERS = {
   aissatou: "usr_demo_aissatou",
@@ -491,13 +491,15 @@ export function createSeedState(now: number): DemoState {
       transactionId: transaction.id,
       transactionReference: transaction.reference,
       transactionTitle: transaction.title,
-      method: "lightning",
+      method: "usdc",
       status,
       amount: transaction.amount,
-      invoice: {
-        paymentRequest: `WOOLU-DEMO-FACTURE-FICTIVE-${id.toUpperCase()}`,
-        amountSats: fakeXofToSats(transaction.amount.amount),
-        expiresAt: at(createdOffset + 15 * MINUTE),
+      deposit: {
+        address: `WOOLU-DEMO-ADRESSE-${id.toUpperCase()}`,
+        network: "solana",
+        amountUsdc: fakeXofToUsdc(transaction.amount.amount),
+        receivedUsdc: "0.000000",
+        reference: id,
       },
       createdAt: at(createdOffset),
       updatedAt: at(confirmedOffset ?? createdOffset + 15 * MINUTE),

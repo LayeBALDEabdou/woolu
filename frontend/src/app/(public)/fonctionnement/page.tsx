@@ -39,7 +39,7 @@ const SECTIONS = [
     title: "Paiement",
     who: "Client, puis vérification par le serveur",
     body: [
-      "Le client demande une facture de paiement. Le serveur Wóolu la génère auprès du prestataire de paiement et l'affiche avec son montant et sa date d'expiration.",
+      "Le client demande une adresse de dépôt USDC. Le serveur Wóolu la crée auprès de Bitnob et affiche le montant exact à envoyer sur Solana.",
       "Le paiement n'est considéré comme reçu qu'une fois confirmé par le serveur. Les fonds sont alors indiqués comme bloqués, et le vendeur est invité à livrer.",
     ],
   },

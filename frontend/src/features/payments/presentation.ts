@@ -12,5 +12,5 @@ export const PAYMENT_STATUS_PRESENTATION: Record<
 }
 
 export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
-  lightning: "Bitcoin Lightning (via Bitnob)",
+  usdc: "USDC sur Solana (via Bitnob)",
 }

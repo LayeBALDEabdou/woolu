@@ -71,7 +71,7 @@ export function DemoSimulatorPanel({ pendingAttempt, activeDisputeId }: DemoSimu
           <p className="text-xs font-medium text-warning-foreground">Webhook de paiement</p>
           {button("Paiement reçu et vérifié", (d) => d.confirmPayment(pendingAttempt.id))}
           {button("Paiement échoué", (d) => d.failPayment(pendingAttempt.id))}
-          {button("Facture expirée", (d) => d.expirePayment(pendingAttempt.id))}
+          {button("Adresse de dépôt expirée", (d) => d.expirePayment(pendingAttempt.id))}
         </div>
       ) : null}
       {activeDisputeId ? (

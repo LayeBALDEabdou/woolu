@@ -2,12 +2,18 @@ import hashlib
 import hmac
 import json
 import re
+from decimal import Decimal
 from unittest.mock import patch
 
 from django.test import TestCase, override_settings
+from django.contrib.auth import get_user_model
+from django.utils import timezone
+from rest_framework.test import APITestCase
 
+from accounts.models import Role
+from transactions.models import Status, Transaction
 from . import bitnob_client as bn
-from .models import AdresseDepot, EnvoiUsdc, WebhookEvent
+from .models import AdresseDepot, EnvoiUsdc, TransactionPaymentAttempt, WebhookEvent
 
 SECRET = "secret-de-test"
 WEBHOOK_URL = "/payments/webhooks/bitnob/"
@@ -164,6 +170,258 @@ class WhoamiTests(TestCase):
     @override_settings(DEBUG=False)
     def test_reserve_aux_admins(self):
         self.assertEqual(self.client.get("/payments/whoami/").status_code, 403)
+
+
+class BitnobProviderErrorTests(TestCase):
+    def test_extrait_seulement_le_code_de_rejet(self):
+        self.assertEqual(bn.provider_error_code({"code": "AUTH_INVALID"}), "AUTH_INVALID")
+        self.assertEqual(bn.provider_error_code({"error": {"code": "KEY_REVOKED"}}), "KEY_REVOKED")
+        self.assertEqual(bn.provider_error_code({"detail": "ne pas journaliser"}), "unknown")
+
+    @override_settings(BITNOB_CLIENT_ID="client-id", BITNOB_CLIENT_SECRET="client-secret")
+    @patch.object(bn.secrets, "token_hex", return_value="a" * 32)
+    @patch.object(bn.time, "time", return_value=1_700_000_000)
+    def test_signature_requete_conforme_au_format_bitnob(self, _, __):
+        payload = '{"chain":"solana"}'
+        headers = bn._signed_headers(payload)
+        expected_message = f"client-id:1700000000:{'a' * 32}:{payload}"
+        expected_signature = hmac.new(
+            b"client-secret", expected_message.encode(), hashlib.sha256
+        ).hexdigest()
+
+        self.assertEqual(headers["X-Auth-Client"], "client-id")
+        self.assertEqual(headers["X-Auth-Timestamp"], "1700000000")
+        self.assertEqual(headers["X-Auth-Nonce"], "a" * 32)
+        self.assertEqual(headers["X-Auth-Signature"], expected_signature)
+
+
+class TransactionPaymentTests(APITestCase):
+    def setUp(self):
+        user_model = get_user_model()
+        self.client_user = user_model.objects.create_user(
+            username="acheteur-paiement@test.com",
+            email="acheteur-paiement@test.com",
+            password="x",
+        )
+        self.client_user.account_profile.role = Role.CLIENT
+        self.client_user.account_profile.email_verified = True
+        self.client_user.account_profile.save()
+        self.merchant = user_model.objects.create_user(
+            username="vendeur-paiement@test.com",
+            email="vendeur-paiement@test.com",
+            password="x",
+        )
+        self.merchant.account_profile.role = Role.VENDEUR
+        self.merchant.account_profile.email_verified = True
+        self.merchant.account_profile.save()
+        self.transaction = Transaction.objects.create(
+            merchant=self.merchant,
+            client=self.client_user,
+            client_name="Acheteur",
+            title="Commande test",
+            kind="product",
+            description="Description",
+            amount=60000,
+            deadline=timezone.localdate(),
+            status=Status.PENDING_PAYMENT,
+            sent_at=timezone.now(),
+        )
+        self.client.force_authenticate(self.client_user)
+
+    @override_settings(BITNOB_XOF_PER_USDC="600", BITNOB_CLIENT_ID="client", BITNOB_CLIENT_SECRET="sandbox_key")
+    @patch.object(bn, "create_address", return_value={"data": {"id": "bitnob-1", "address": ADRESSE_SOL}})
+    def test_creation_et_lecture_des_endpoints(self, mock_address):
+        response = self.client.post(
+            f"/api/transactions/{self.transaction.id}/payments",
+            {"method": "usdc"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data["method"], "usdc")
+        self.assertEqual(response.data["status"], "pending")
+        self.assertEqual(response.data["amount"], {"amount": 60000, "currency": "XOF"})
+        self.assertEqual(response.data["deposit"]["network"], "solana")
+        self.assertEqual(response.data["deposit"]["amountUsdc"], "100.000000")
+        self.assertTrue(response.data["isSimulated"])
+        mock_address.assert_called_once()
+        attempt = TransactionPaymentAttempt.objects.get()
+        self.assertEqual(attempt.bitnob_id, "bitnob-1")
+        self.transaction.refresh_from_db()
+        self.assertEqual(self.transaction.status, Status.PENDING_PAYMENT)
+        self.assertEqual(self.transaction.escrow_status, "not_started")
+        cancel = self.client.post(f"/api/transactions/{self.transaction.id}/cancel", {}, format="json")
+        self.assertEqual(cancel.status_code, 409)
+        self.assertEqual(cancel.data["code"], "CONFLICT")
+
+        listing = self.client.get(f"/api/transactions/{self.transaction.id}/payments")
+        self.assertEqual(listing.status_code, 200)
+        self.assertEqual([item["id"] for item in listing.data], [str(attempt.id)])
+        history = self.client.get("/api/payments")
+        self.assertEqual(history.status_code, 200)
+        detail = self.client.get(f"/api/payments/{attempt.id}")
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.data["deposit"]["address"], ADRESSE_SOL)
+
+    @override_settings(BITNOB_XOF_PER_USDC="", BITNOB_CLIENT_ID="client", BITNOB_CLIENT_SECRET="secret")
+    @patch.object(bn, "create_address")
+    def test_taux_absent_refuse_sans_appeler_bitnob(self, mock_address):
+        response = self.client.post(
+            f"/api/transactions/{self.transaction.id}/payments", {"method": "usdc"}, format="json"
+        )
+        self.assertEqual(response.status_code, 503)
+        mock_address.assert_not_called()
+
+    @override_settings(BITNOB_XOF_PER_USDC="0", BITNOB_CLIENT_ID="client", BITNOB_CLIENT_SECRET="secret")
+    @patch.object(bn, "create_address")
+    def test_taux_invalide_refuse(self, mock_address):
+        response = self.client.post(
+            f"/api/transactions/{self.transaction.id}/payments", {"method": "usdc"}, format="json"
+        )
+        self.assertEqual(response.status_code, 503)
+        mock_address.assert_not_called()
+
+    @override_settings(BITNOB_XOF_PER_USDC="600", BITNOB_CLIENT_ID="client", BITNOB_CLIENT_SECRET="secret")
+    @patch.object(
+        bn,
+        "create_address",
+        side_effect=bn.BitnobError(
+            401, {"code": "AUTH_INVALID", "detail": "do not log sensitive response details"}
+        ),
+    )
+    def test_rejet_bitnob_journalise_le_code_sans_la_reponse_complete(self, _):
+        path = f"/api/transactions/{self.transaction.id}/payments"
+        with self.assertLogs("payments", level="WARNING") as captured:
+            response = self.client.post(path, {"method": "usdc"}, format="json")
+
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("AUTH_INVALID", captured.output[0])
+        self.assertNotIn("do not log sensitive response details", captured.output[0])
+
+    @override_settings(BITNOB_XOF_PER_USDC="700", BITNOB_CLIENT_ID="client", BITNOB_CLIENT_SECRET="secret")
+    @patch.object(bn, "create_address", return_value={"address": ADRESSE_SOL})
+    def test_conversion_arrondie_vers_le_haut_a_six_decimales(self, _):
+        response = self.client.post(
+            f"/api/transactions/{self.transaction.id}/payments", {"method": "usdc"}, format="json"
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["deposit"]["amountUsdc"], "85.714286")
+
+    @override_settings(BITNOB_XOF_PER_USDC="600", BITNOB_CLIENT_ID="client", BITNOB_CLIENT_SECRET="secret")
+    @patch.object(bn, "create_address", return_value={"address": ADRESSE_SOL})
+    def test_une_seule_adresse_active(self, mock_address):
+        payload = {"method": "usdc"}
+        path = f"/api/transactions/{self.transaction.id}/payments"
+        self.assertEqual(self.client.post(path, payload, format="json").status_code, 201)
+        self.assertEqual(self.client.post(path, payload, format="json").status_code, 409)
+        mock_address.assert_called_once()
+
+    @override_settings(BITNOB_XOF_PER_USDC="600", BITNOB_CLIENT_ID="client", BITNOB_CLIENT_SECRET="secret")
+    @patch.object(bn, "create_address")
+    def test_seul_le_client_peut_payer_et_les_tiers_ne_voient_pas_les_tentatives(self, mock_address):
+        self.client.force_authenticate(self.merchant)
+        response = self.client.post(
+            f"/api/transactions/{self.transaction.id}/payments", {"method": "usdc"}, format="json"
+        )
+        self.assertEqual(response.status_code, 403)
+        mock_address.assert_not_called()
+
+        stranger = get_user_model().objects.create_user(
+            username="tiers-paiement@test.com", email="tiers-paiement@test.com", password="x"
+        )
+        self.client.force_authenticate(stranger)
+        self.assertEqual(self.client.get(f"/api/transactions/{self.transaction.id}/payments").status_code, 404)
+
+    @override_settings(
+        BITNOB_XOF_PER_USDC="600",
+        BITNOB_CLIENT_ID="client",
+        BITNOB_CLIENT_SECRET="secret",
+        BITNOB_WEBHOOK_SECRET=SECRET,
+    )
+    @patch.object(bn, "create_address", return_value={"address": ADRESSE_SOL})
+    def test_webhook_confirme_seulement_apres_reception_du_montant_total(self, _):
+        response = self.client.post(
+            f"/api/transactions/{self.transaction.id}/payments", {"method": "usdc"}, format="json"
+        )
+        attempt = TransactionPaymentAttempt.objects.get()
+
+        invalid = {
+            "event": "deposit.success",
+            "event_id": "evt-non-usdc",
+            "data": {
+                "reference": attempt.reference,
+                "address": ADRESSE_SOL,
+                "amount": "100",
+                "currency": "BTC",
+                "chain": "solana",
+            },
+        }
+        body = json.dumps(invalid).encode()
+        self.client.post(
+            WEBHOOK_URL,
+            body,
+            content_type="application/json",
+            headers={"x-bitnob-signature": signer(body)},
+        )
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.montant_recu_usdc, Decimal("0"))
+
+        first = {
+            "event": "deposit.success",
+            "event_id": "evt-part-1",
+            "data": {
+                "reference": attempt.reference,
+                "address": ADRESSE_SOL,
+                "amount": "30",
+                "currency": "USDC",
+                "chain": "solana",
+            },
+        }
+        body = json.dumps(first).encode()
+        self.assertEqual(
+            self.client.post(
+                WEBHOOK_URL,
+                body,
+                content_type="application/json",
+                headers={"x-bitnob-signature": signer(body)},
+            ).status_code,
+            200,
+        )
+        attempt.refresh_from_db()
+        self.transaction.refresh_from_db()
+        self.assertEqual(attempt.statut, "pending")
+        self.assertEqual(attempt.montant_recu_usdc, Decimal("30"))
+        self.assertEqual(self.transaction.status, Status.PENDING_PAYMENT)
+        body = json.dumps(first).encode()
+        self.client.post(
+            WEBHOOK_URL,
+            body,
+            content_type="application/json",
+            headers={"x-bitnob-signature": signer(body)},
+        )
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.montant_recu_usdc, Decimal("30"))
+
+        second = {
+            **first,
+            "event_id": "evt-part-2",
+            "data": {**first["data"], "amount": "70"},
+        }
+        body = json.dumps(second).encode()
+        self.assertEqual(
+            self.client.post(
+                WEBHOOK_URL,
+                body,
+                content_type="application/json",
+                headers={"x-bitnob-signature": signer(body)},
+            ).status_code,
+            200,
+        )
+        attempt.refresh_from_db()
+        self.transaction.refresh_from_db()
+        self.assertEqual(attempt.statut, "confirmed")
+        self.assertEqual(attempt.confirme_le is not None, True)
+        self.assertEqual(self.transaction.status, Status.PAYMENT_CONFIRMED)
+        self.assertEqual(self.transaction.escrow_status, "held")
 
 
 class DocumentationTests(TestCase):

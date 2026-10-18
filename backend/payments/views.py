@@ -9,9 +9,12 @@ from django.db.models import Q
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
+from django.db import transaction as db_transaction
+from django.utils import timezone
 
 from . import bitnob_client as bn
-from .models import AdresseDepot, EnvoiUsdc, WebhookEvent
+from .models import AdresseDepot, EnvoiUsdc, TransactionPaymentAttempt, WebhookEvent
+from transactions.models import EventType, Status, Transaction
 
 log = logging.getLogger(__name__)
 
@@ -179,35 +182,94 @@ def webhook_bitnob(request):
     payload = lire_json(request)
     if payload is None:
         return HttpResponse(status=400)
-    event = payload.get("event") or ""
+    event = str(payload.get("event") or "")
     data = payload.get("data", payload)  # certains événements mettent tout à la racine
-    event_id = payload.get("event_id") or data.get("reference")
+    if not isinstance(data, dict):
+        return HttpResponse(status=400)
+    event_id = (
+        payload.get("event_id")
+        or payload.get("id")
+        or data.get("event_id")
+        or data.get("id")
+        or data.get("transaction_hash")
+        or data.get("tx_hash")
+        or data.get("hash")
+        or data.get("reference")
+    )
     if not event_id:
         log.warning("Webhook Bitnob sans event_id ni reference : %s", payload)
         return HttpResponse(status=200)  # inutile que Bitnob réessaie
 
     # 2. Ignorer les doublons (Bitnob peut renvoyer le même événement)
-    _, cree = WebhookEvent.objects.get_or_create(event_id=event_id, defaults={"event": event, "payload": payload})
-    if not cree:
-        return HttpResponse(status=200)
+    with db_transaction.atomic():
+        _, cree = WebhookEvent.objects.get_or_create(
+            event_id=event_id, defaults={"event": event, "payload": payload}
+        )
+        if not cree:
+            return HttpResponse(status=200)
 
-    # 3. Dépôt reçu : la doc ne fixe ni le nom de l'événement ni les champs, on
-    # reconnaît l'adresse ou notre référence (voir WebhookEvent dans l'admin)
-    if "deposit" in event and event.endswith("success"):
-        adresse = data.get("address") or data.get("to_address")
-        depot = AdresseDepot.objects.filter(
-            Q(reference=data.get("reference") or "") | Q(adresse=adresse or "-")
-        ).first()
-        if depot and depot.statut != AdresseDepot.Statut.RECU:
-            depot.statut = AdresseDepot.Statut.RECU
-            depot.montant = str(data.get("amount", ""))
-            depot.devise = str(data.get("currency", ""))[:10]
-            depot.save()
-            log.info("Dépôt reçu sur %s : %s %s", depot.adresse, depot.montant, depot.devise)
+        # 3. Dépôt reçu : rattacher au dépôt autonome ou à une tentative transactionnelle.
+        if "deposit" in event.lower() and event.lower().endswith("success"):
+            reference = str(data.get("reference") or "")
+            adresse = data.get("address") or data.get("to_address")
+            depot = AdresseDepot.objects.select_for_update().filter(
+                Q(reference=reference) | Q(adresse=adresse or "-")
+            ).first()
+            if depot and depot.statut != AdresseDepot.Statut.RECU:
+                depot.statut = AdresseDepot.Statut.RECU
+                depot.montant = str(data.get("amount", ""))
+                depot.devise = str(data.get("currency", ""))[:10]
+                depot.save()
+                log.info("Dépôt reçu sur %s : %s %s", depot.adresse, depot.montant, depot.devise)
 
-    # 4. Envoi confirmé sur la blockchain
-    if event == "transfer.success":
-        EnvoiUsdc.objects.filter(reference=data.get("reference") or "").update(statut="completed")
+            tentative = TransactionPaymentAttempt.objects.select_for_update().filter(
+                Q(reference=reference) | Q(adresse=adresse or "-")
+            ).select_related("transaction").first()
+            if tentative and tentative.statut == TransactionPaymentAttempt.Statut.EN_ATTENTE:
+                devise = str(data.get("currency") or "").upper()
+                reseau = str(data.get("chain") or data.get("network") or "").lower()
+                try:
+                    montant_recu = Decimal(str(data.get("amount", "")))
+                    montant_valide = (
+                        montant_recu.is_finite()
+                        and montant_recu > 0
+                        and montant_recu.quantize(Decimal("0.000001")) == montant_recu
+                    )
+                except (InvalidOperation, ValueError):
+                    montant_valide = False
+                    montant_recu = Decimal("0")
+                if not montant_valide:
+                    log.warning("Webhook Bitnob : montant de dépôt USDC invalide (%s)", tentative.reference)
+                elif devise != "USDC":
+                    log.warning("Webhook Bitnob : dépôt non-USDC ignoré (%s)", tentative.reference)
+                elif reseau and reseau != tentative.reseau:
+                    log.warning("Webhook Bitnob : mauvais réseau pour le dépôt (%s)", tentative.reference)
+                else:
+                    tentative.montant_recu_usdc = min(
+                        tentative.montant_usdc, tentative.montant_recu_usdc + montant_recu
+                    )
+                    if tentative.montant_recu_usdc >= tentative.montant_usdc:
+                        transaction = Transaction.objects.select_for_update().get(pk=tentative.transaction_id)
+                        if transaction.status == Status.PENDING_PAYMENT:
+                            transaction.confirm_payment()
+                            tentative.statut = TransactionPaymentAttempt.Statut.CONFIRME
+                            tentative.confirme_le = timezone.now()
+                        else:
+                            log.warning(
+                                "Paiement USDC reçu pour une transaction hors attente de paiement (%s)",
+                                transaction.reference,
+                            )
+                    tentative.save()
+                    log.info(
+                        "Dépôt USDC %s reçu : %s/%s",
+                        tentative.reference,
+                        tentative.montant_recu_usdc,
+                        tentative.montant_usdc,
+                    )
+
+        # 4. Envoi confirmé sur la blockchain
+        if event == "transfer.success":
+            EnvoiUsdc.objects.filter(reference=data.get("reference") or "").update(statut="completed")
 
     # 5. Toujours répondre 200, sinon Bitnob réessaie
     return HttpResponse(status=200)

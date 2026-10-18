@@ -51,6 +51,7 @@ INSTALLED_APPS = [
     'accounts.apps.AccountsConfig',
     'payments',
     'transactions',
+    'notifications',
 ]
 
 MIDDLEWARE = [
@@ -197,6 +198,7 @@ DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'Wóolu <no-reply@loca
 BITNOB_CLIENT_ID = os.environ.get('BITNOB_CLIENT_ID', '')
 BITNOB_CLIENT_SECRET = os.environ.get('BITNOB_CLIENT_SECRET', '')
 BITNOB_WEBHOOK_SECRET = os.environ.get('BITNOB_WEBHOOK_SECRET', '')
+BITNOB_XOF_PER_USDC = os.environ.get('BITNOB_XOF_PER_USDC', '')
 # Paiement de factures sans connexion, pour tester en ligne (clé sandbox uniquement)
 BITNOB_PAIEMENTS_PUBLICS = os.environ.get('BITNOB_PAIEMENTS_PUBLICS') == '1'
 

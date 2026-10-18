@@ -555,6 +555,109 @@ SCHEMA["paths"].update(
     }
 )
 
+SCHEMA["components"]["schemas"]["TentativePaiement"] = {
+    "type": "object",
+    "properties": {
+        "id": {"type": "string", "format": "uuid"},
+        "transactionId": {"type": "string", "format": "uuid"},
+        "transactionReference": {"type": "string"},
+        "transactionTitle": {"type": "string"},
+        "method": {"type": "string", "const": "usdc"},
+        "status": {"type": "string", "enum": ["pending", "confirmed", "failed"]},
+        "amount": {"$ref": "#/components/schemas/Montant"},
+        "deposit": {
+            "type": "object",
+            "properties": {
+                "address": {"type": "string"},
+                "network": {"type": "string", "const": "solana"},
+                "amountUsdc": {"type": "string", "example": "5.000000"},
+                "receivedUsdc": {"type": "string", "example": "0.000000"},
+                "reference": {"type": "string"},
+            },
+        },
+        "createdAt": {"type": "string", "format": "date-time"},
+        "updatedAt": {"type": "string", "format": "date-time"},
+        "confirmedAt": {"type": ["string", "null"], "format": "date-time"},
+        "failureReason": {"type": ["string", "null"]},
+        "isSimulated": {"type": "boolean"},
+    },
+}
+
+SCHEMA["paths"].update(
+    {
+        "/api/transactions/{id}/payments": {
+            "get": {
+                "tags": ["Transactions"],
+                "summary": "Lister les paiements d’une transaction",
+                "parameters": [ID_TRANSACTION],
+                "responses": {
+                    "200": reponse(
+                        "Tentatives, de la plus récente à la plus ancienne",
+                        {"type": "array", "items": {"$ref": "#/components/schemas/TentativePaiement"}},
+                    ),
+                    "404": ERREUR_API,
+                },
+            },
+            "post": {
+                "tags": ["Transactions"],
+                "summary": "Créer une adresse de paiement USDC",
+                "description": (
+                    "Réservé au client d’une transaction en attente de paiement. "
+                    "Le montant USDC est calculé côté serveur avec BITNOB_XOF_PER_USDC. "
+                    "Le paiement et le séquestre ne sont confirmés qu’après le webhook Bitnob signé."
+                ),
+                "parameters": [ID_TRANSACTION],
+                "requestBody": corps(
+                    {
+                        "type": "object",
+                        "required": ["method"],
+                        "properties": {"method": {"type": "string", "const": "usdc"}},
+                    }
+                ),
+                "responses": {
+                    "201": reponse("Adresse et montant USDC à régler", {"$ref": "#/components/schemas/TentativePaiement"}),
+                    "400": ERREUR_API,
+                    "401": ERREUR_API,
+                    "403": ERREUR_API,
+                    "409": ERREUR_API,
+                    "503": ERREUR_API,
+                },
+            },
+        },
+        "/api/payments": {
+            "get": {
+                "tags": ["Transactions"],
+                "summary": "Historique des paiements",
+                "responses": {
+                    "200": reponse(
+                        "Tentatives des transactions visibles par l’utilisateur",
+                        {"type": "array", "items": {"$ref": "#/components/schemas/TentativePaiement"}},
+                    ),
+                    "401": ERREUR_API,
+                },
+            }
+        },
+        "/api/payments/{attempt_id}": {
+            "get": {
+                "tags": ["Transactions"],
+                "summary": "Lire une tentative de paiement",
+                "parameters": [
+                    {
+                        "name": "attempt_id",
+                        "in": "path",
+                        "required": True,
+                        "schema": {"type": "string", "format": "uuid"},
+                    }
+                ],
+                "responses": {
+                    "200": reponse("Tentative", {"$ref": "#/components/schemas/TentativePaiement"}),
+                    "404": ERREUR_API,
+                },
+            }
+        },
+    }
+)
+
 SCHEMA["paths"].update(
     {
         "/api/transactions": {

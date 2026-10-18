@@ -20,7 +20,7 @@ validés par l'équipe produit** avant la mise en production.
 | 10 | Réclamations | Seul le client ouvre une réclamation (statuts `payment_confirmed`, `in_progress`, `awaiting_confirmation`), une seule active à la fois. | `transitions.ts` |
 | 11 | Cycle d'un litige | Une réponse du vendeur sur un dossier `open`, ou d'une partie sur un dossier `awaiting_response`, le fait passer `under_review`. Le retrait d'une réclamation par le client n'est pas prévu. | `demo-backend.ts` |
 | 12 | Issue d'un litige | Deux issues : libération totale au vendeur, ou remboursement total au client. Les remboursements partiels ne sont pas modélisés. | `disputes/types.ts` |
-| 13 | Paiement | Seule méthode : Bitcoin Lightning via Bitnob. Facture valable 15 min en démo (la durée réelle est fixée par le backend). | `payments/types.ts` |
+| 13 | Paiement | Paiement client en USDC sur Solana via Bitnob ; le serveur convertit le montant XOF avec `BITNOB_XOF_PER_USDC` et confirme le séquestre par webhook. | `payments/types.ts` |
 | 14 | Frais | Non définis ; l'interface l'indique (« Frais de service : non définis »). | `payment-view.tsx` |
 | 15 | Confirmation de réception | Possible dès `in_progress` (le client a reçu avant que le vendeur ne déclare la fin) ; exige un séquestre `held`. | `transitions.ts` |
 | 16 | Mot de passe | 10 caractères minimum avec lettre et chiffre (règle d'interface ; le backend applique la sienne). | `lib/validations/common.ts` |

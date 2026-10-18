@@ -1,5 +1,7 @@
 from django.urls import path
 
+from payments.transaction_views import PaymentAttemptView, PaymentHistoryView, TransactionPaymentsView
+
 from . import views
 
 # Sans slash final : chemins du contrat d'API du frontend (frontend/docs/API_ENDPOINTS.md)
@@ -13,5 +15,8 @@ urlpatterns = [
     path('transactions/<uuid:pk>/delivery/start', views.StartDeliveryView.as_view()),
     path('transactions/<uuid:pk>/delivery/complete', views.CompleteDeliveryView.as_view()),
     path('transactions/<uuid:pk>/confirm-receipt', views.ConfirmReceiptView.as_view()),
+    path('transactions/<uuid:pk>/payments', TransactionPaymentsView.as_view()),
+    path('payments', PaymentHistoryView.as_view()),
+    path('payments/<uuid:attempt_id>', PaymentAttemptView.as_view()),
     path('dashboard/summary', views.DashboardSummaryView.as_view()),
 ]

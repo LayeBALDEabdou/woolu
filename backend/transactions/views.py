@@ -12,6 +12,7 @@ from rest_framework.views import APIView
 from accounts.models import Role
 from config.api_errors import error
 from config.api_errors import exception_handler as api_exception_handler
+from notifications.services import create_transaction_proposed_notification
 
 from .models import EscrowStatus, EventType, Party, Status, Transaction, TransitionError
 from .rules import ACTION_RULES, ActionRefused, check_action, needs_attention, normalize_phone
@@ -155,6 +156,12 @@ class PartyActionView(TransactionApiView):
         with db_transaction.atomic():
             transaction = self.get_transaction(pk, lock=True)
             party = check_action(self.action, transaction, request.user)
+            if self.action == 'cancel' and transaction.payment_attempts.filter(statut='pending').exists():
+                return error(
+                    'CONFLICT',
+                    "Une adresse de paiement est active : attendez la confirmation du dépôt avant d'annuler.",
+                    status.HTTP_409_CONFLICT,
+                )
             now = timezone.now()
             if self.action == 'send_to_client':
                 transaction.sent_at = now
@@ -162,6 +169,8 @@ class PartyActionView(TransactionApiView):
                 transaction.client_accepted_at = now
             to, _ = ACTION_RULES[self.action]
             transaction.move_to(to, self.event, party, request.user, reason.validated_data.get('reason'))
+            if self.action == 'send_to_client':
+                create_transaction_proposed_notification(transaction)
         return self.detail(transaction)
 
 

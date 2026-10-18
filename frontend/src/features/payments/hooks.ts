@@ -5,7 +5,7 @@ import { useServices } from "@/components/providers/services-provider"
 import { queryKeys } from "@/lib/api/query-keys"
 import type { PaymentMethod } from "./types"
 
-/** Fréquence de relecture du statut tant qu'une facture est en attente côté serveur. */
+/** Fréquence de relecture du statut tant qu'un dépôt est en attente côté serveur. */
 export const PAYMENT_POLL_INTERVAL_MS = 5_000
 
 export function useTransactionPayments(transactionId: string) {

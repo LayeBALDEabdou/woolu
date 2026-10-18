@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { useCallback } from "react"
+import { useEffect } from "react"
 import { AlertTriangle, CheckCircle2, Loader2, ReceiptText, RefreshCw, Zap } from "lucide-react"
 import { toast } from "sonner"
 import { Amount } from "@/components/data-display/amount"
@@ -19,7 +19,7 @@ import { useInitiatePayment, useTransactionPayments } from "../hooks"
 import { PAYMENT_METHOD_LABELS } from "../presentation"
 import { canInitiatePayment, findPendingAttempt } from "../rules"
 import { EscrowIndicator } from "./escrow-indicator"
-import { InvoiceDisplay } from "./invoice-display"
+import { DepositDisplay } from "./deposit-display"
 import { PaymentAttemptsTable } from "./payment-attempts-table"
 
 export function PaymentView({ transactionId }: { transactionId: string }) {
@@ -27,8 +27,12 @@ export function PaymentView({ transactionId }: { transactionId: string }) {
   const transactionQuery = useTransaction(transactionId)
   const paymentsQuery = useTransactionPayments(transactionId)
   const initiate = useInitiatePayment(transactionId)
-  const refetchPayments = paymentsQuery.refetch
-  const onLocalExpiry = useCallback(() => void refetchPayments(), [refetchPayments])
+  const refetchTransaction = transactionQuery.refetch
+  useEffect(() => {
+    if (paymentsQuery.data?.some((attempt) => attempt.status === "confirmed")) {
+      void refetchTransaction()
+    }
+  }, [paymentsQuery.data, refetchTransaction])
 
   if (transactionQuery.isPending || paymentsQuery.isPending) return <PageLoading />
   if (transactionQuery.isError) return <ErrorState error={transactionQuery.error} onRetry={() => void transactionQuery.refetch()} />
@@ -43,8 +47,8 @@ export function PaymentView({ transactionId }: { transactionId: string }) {
   const paymentConfirmed = attempts.some((attempt) => attempt.status === "confirmed")
 
   const startPayment = () =>
-    initiate.mutate("lightning", {
-      onSuccess: () => toast.success("Facture générée. En attente du paiement."),
+    initiate.mutate("usdc", {
+      onSuccess: () => toast.success("Adresse de paiement créée. Envoyez les USDC pour continuer."),
       onError: (error) => toast.error(getErrorMessage(error)),
     })
 
@@ -81,11 +85,11 @@ export function PaymentView({ transactionId }: { transactionId: string }) {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Zap className="size-4 text-brand-700" aria-hidden />
-                  Facture à régler
+                  Dépôt USDC à effectuer
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-5">
-                <InvoiceDisplay attempt={pending} onLocalExpiry={onLocalExpiry} />
+                <DepositDisplay attempt={pending} />
                 <div role="status" aria-live="polite" className="flex items-center gap-2 rounded-lg bg-muted/60 px-3 py-2 text-sm">
                   <Loader2 className="size-4 animate-spin text-brand-700" aria-hidden />
                   En attente de la confirmation du paiement par le serveur. Cette page se met à jour automatiquement.
@@ -112,10 +116,12 @@ export function PaymentView({ transactionId }: { transactionId: string }) {
                   <Alert variant={lastAttempt.status === "failed" ? "destructive" : "default"}>
                     <AlertTriangle aria-hidden />
                     <AlertTitle>
-                      {lastAttempt.status === "failed" ? "Le dernier paiement a échoué" : "La dernière facture a expiré"}
+                      {lastAttempt.status === "failed"
+                        ? "Le dernier paiement a échoué"
+                        : "La dernière demande de paiement a expiré"}
                     </AlertTitle>
                     <AlertDescription>
-                      {lastAttempt.failureReason ?? "Aucun fonds n'a été reçu."} Vous pouvez générer une nouvelle facture.
+                      {lastAttempt.failureReason ?? "Aucun fonds n'a été reçu."} Vous pouvez créer une nouvelle adresse.
                     </AlertDescription>
                   </Alert>
                 ) : null}
@@ -125,17 +131,19 @@ export function PaymentView({ transactionId }: { transactionId: string }) {
                   <div className="flex items-center gap-3 rounded-xl border-2 border-brand-600 bg-brand-50/60 p-4">
                     <Zap className="size-5 text-brand-700" aria-hidden />
                     <div className="flex-1">
-                      <p className="font-medium">{PAYMENT_METHOD_LABELS.lightning}</p>
+                      <p className="font-medium">{PAYMENT_METHOD_LABELS.usdc}</p>
                       <p className="text-xs text-muted-foreground">Seule méthode prise en charge actuellement.</p>
                     </div>
                     <CheckCircle2 className="size-5 text-brand-700" aria-label="Sélectionnée" />
                   </div>
-                  <p className="text-xs text-muted-foreground">Mobile Money (Wave, Orange Money) : non disponible.</p>
+                  <p className="text-xs text-muted-foreground">
+                    Envoyez uniquement des USDC sur le réseau Solana. Mobile Money n&apos;est pas disponible.
+                  </p>
                 </fieldset>
 
                 <div className="rounded-lg bg-muted/60 p-3 text-sm text-muted-foreground">
-                  En cliquant ci-dessous, vous demandez au serveur Wóolu de générer une facture. Le paiement ne sera
-                  considéré comme effectué qu&apos;une fois confirmé par le serveur, jamais avant.
+                  En continuant, le serveur Wóolu crée une adresse de dépôt Bitnob et calcule le montant USDC. Le paiement
+                  ne sera considéré comme effectué qu&apos;après confirmation du dépôt par le serveur.
                 </div>
 
                 <Button size="lg" onClick={startPayment} disabled={!canStart || initiate.isPending} className="w-full sm:w-auto">
@@ -146,7 +154,7 @@ export function PaymentView({ transactionId }: { transactionId: string }) {
                   ) : (
                     <ReceiptText aria-hidden />
                   )}
-                  {lastAttempt ? "Générer une nouvelle facture" : "Générer la facture de paiement"}
+                  {lastAttempt ? "Créer une nouvelle adresse" : "Obtenir l'adresse de paiement"}
                 </Button>
               </CardContent>
             </Card>
