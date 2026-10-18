@@ -35,7 +35,24 @@ export function useLogin() {
 export function useRegister() {
   const { auth } = useServices()
   const startSession = useStartSession()
-  return useMutation({ mutationFn: (input: RegisterInput) => auth.register(input), onSuccess: startSession })
+  return useMutation({
+    mutationFn: (input: RegisterInput) => auth.register(input),
+    onSuccess: (result) => {
+      if (result.status === "authenticated") startSession(result.session)
+    },
+  })
+}
+
+/** Confirme l'adresse e-mail avec le jeton du lien : le backend ouvre alors la session. */
+export function useVerifyEmail() {
+  const { auth } = useServices()
+  const startSession = useStartSession()
+  return useMutation({ mutationFn: (token: string) => auth.verifyEmail(token), onSuccess: startSession })
+}
+
+export function useResendVerification() {
+  const { auth } = useServices()
+  return useMutation({ mutationFn: (email: string) => auth.resendVerification(email) })
 }
 
 export function useSwitchDemoAccount() {

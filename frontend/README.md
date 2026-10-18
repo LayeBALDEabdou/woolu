@@ -4,9 +4,10 @@ Interface web de **Wóolu**, une plateforme qui sécurise les transactions entre
 prestataires au Sénégal. Le vendeur propose des conditions, le client les accepte, le paiement est vérifié
 par le serveur, puis les fonds ne sont libérés qu'après confirmation de la livraison ou décision en cas de litige.
 
-> **État actuel** : le frontend est complet et fonctionne en **mode démonstration** (données et paiements
-> simulés dans le navigateur). Le backend Django du dépôt ne fournit encore aucune API. Le contrat attendu
-> est décrit dans [`docs/API_ENDPOINTS.md`](docs/API_ENDPOINTS.md).
+> **État actuel** : le frontend est complet en **mode démonstration** (données et paiements simulés dans
+> le navigateur). En mode `api`, l'**authentification** fonctionne avec le backend Django du dépôt
+> (inscription, confirmation de l'adresse e-mail, connexion, profil, mots de passe). Les autres domaines
+> sont en cours de branchement. Le contrat attendu est décrit dans [`docs/API_ENDPOINTS.md`](docs/API_ENDPOINTS.md).
 
 ## Sommaire
 
@@ -26,7 +27,7 @@ par le serveur, puis les fonds ne sont libérés qu'après confirmation de la li
 | Domaine | Pages | État |
 | --- | --- | --- |
 | Site public | `/`, `/fonctionnement`, `/securite` | ✅ Fonctionnel |
-| Authentification | `/connexion`, `/inscription`, `/mot-de-passe-oublie`, `/reinitialisation-mot-de-passe` | ✅ Interface ; 🔶 simulée en démo |
+| Authentification | `/connexion`, `/inscription`, `/verification-email`, `/mot-de-passe-oublie`, `/reinitialisation-mot-de-passe` | ✅ Branchée sur le backend ; 🔶 simulée en démo |
 | Tableau de bord | `/dashboard` (selon le rôle) | ✅ |
 | Transactions | `/transactions`, `/transactions/nouvelle`, `/transactions/[id]` | ✅ Liste (recherche, filtres, tri, pagination), création avec récapitulatif, détail, actions selon rôle et état |
 | Paiement | `/transactions/[id]/paiement`, `/paiements` | ✅ Interface ; 🔶 factures fictives en démo ; ⏳ Bitnob à brancher côté backend |
@@ -54,6 +55,24 @@ npm run dev                  # http://localhost:3000
 
 Toute variable `NEXT_PUBLIC_*` est visible dans le navigateur. **Aucune clé Bitnob ne doit être définie
 côté frontend.**
+
+### Lancer le frontend avec le backend en local
+
+```bash
+# Terminal 1 : backend (voir backend/README.md), avec CORS_ALLOWED_ORIGINS=http://localhost:3000
+cd backend && python manage.py migrate && python manage.py runserver localhost:8000
+
+# Terminal 2 : frontend
+cd frontend
+NEXT_PUBLIC_APP_MODE=api NEXT_PUBLIC_API_BASE_URL=http://localhost:8000 npm run dev
+```
+
+- Utilisez **le même nom d'hôte** des deux côtés (`localhost`, pas `127.0.0.1` d'un côté) : sinon le
+  frontend ne peut pas lire le cookie `csrftoken` et les requêtes `POST` sont refusées.
+- Sans serveur SMTP, les e-mails (confirmation d'adresse, mot de passe oublié) s'affichent dans la console
+  du backend : copiez-y le lien.
+- En production, si le frontend et l'API sont sur deux sous-domaines, le backend doit définir
+  `CSRF_COOKIE_DOMAIN` sur le domaine parent (voir `backend/.env.example`).
 
 ## Commandes
 
@@ -184,8 +203,8 @@ sont définis dans `next.config.ts`.
 
 ## Limites connues
 
-- **Aucune API réelle** : tant que le backend n'implémente pas le contrat de `docs/API_ENDPOINTS.md`,
-  seul le mode démo est utilisable.
+- **API partielle** : en mode `api`, seule l'authentification est branchée et vérifiée. Les autres
+  écrans appellent des endpoints que le backend n'expose pas encore (par exemple `/api/notifications`).
 - **Données de démo locales** : elles sont propres à chaque navigateur et non partagées entre appareils.
 - **Pièces justificatives** (photos de livraison, preuves de litige) : non implémentées, et signalées
   comme indisponibles dans l'interface.
