@@ -6,13 +6,13 @@ const STEPS: Array<{ actor: Actor; title: string; text: string; woolu?: string; 
   {
     actor: "vendeur",
     title: "Propose les conditions",
-    text: "Produit ou service, prix en francs CFA, date limite, délai de réclamation.",
+    text: "Prix, délai et description.",
     col: "lg:col-start-2",
   },
   {
     actor: "client",
     title: "Accepte les conditions",
-    text: "Il lit tout avant de s'engager. Sans son accord, rien ne démarre.",
+    text: "Sans son accord, rien ne démarre.",
     col: "lg:col-start-3",
   },
   {
@@ -25,13 +25,13 @@ const STEPS: Array<{ actor: Actor; title: string; text: string; woolu?: string; 
   {
     actor: "vendeur",
     title: "Livre ou réalise",
-    text: "Il sait que l'argent est là. Il indique l'envoi et le suivi.",
+    text: "Il sait que l'argent est là.",
     col: "lg:col-start-5",
   },
   {
     actor: "client",
     title: "Confirme ou signale",
-    text: "Tout est conforme : il confirme. Sinon, il ouvre une réclamation.",
+    text: "Sinon, il ouvre une réclamation.",
     woolu: "Wóolu libère les fonds, ou tranche le litige",
     col: "lg:col-start-6",
   },

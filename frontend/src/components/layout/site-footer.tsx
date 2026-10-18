@@ -7,7 +7,7 @@ const FOOTER_SECTIONS = [
     links: [
       { href: "/fonctionnement", label: "Fonctionnement" },
       { href: "/securite", label: "Sécurité et règles" },
-      { href: "/#faq", label: "Questions fréquentes" },
+      { href: "/questions-frequentes", label: "Questions fréquentes" },
     ],
   },
   {
