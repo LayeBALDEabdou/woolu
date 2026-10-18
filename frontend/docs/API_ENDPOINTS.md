@@ -1,8 +1,9 @@
 # Contrat d'API attendu par le frontend
 
 Ce document liste les endpoints que le frontend appelle en mode `api`
-(`NEXT_PUBLIC_APP_MODE=api`). **Aucun n'existe encore** dans `backend/` (projet Django vide) :
-c'est le contrat à implémenter ou à négocier avec l'équipe backend.
+(`NEXT_PUBLIC_APP_MODE=api`). L'**authentification** est implémentée dans `backend/accounts` et
+branchée ; les transactions sont en cours dans `backend/transactions`. Le reste est le contrat à
+implémenter ou à négocier avec l'équipe backend.
 
 Les implémentations HTTP correspondantes se trouvent dans `src/features/*/services/*-service.ts`.
 Les types TypeScript des requêtes et réponses sont dans `src/features/*/types.ts` et font foi.
@@ -19,7 +20,8 @@ Les types TypeScript des requêtes et réponses sont dans `src/features/*/types.
 | CORS | Si le frontend et l'API ont des origines différentes : `Access-Control-Allow-Credentials: true` et origine explicite |
 | Erreurs | Corps `{ "code": "...", "message": "...", "fieldErrors": { "champ": "message" } }` |
 
-Codes d'erreur reconnus (`src/lib/api/errors.ts`) : `UNAUTHENTICATED` (401), `FORBIDDEN` (403),
+Codes d'erreur reconnus (`src/lib/api/errors.ts`) : `UNAUTHENTICATED` (401), `EMAIL_NOT_VERIFIED` (403),
+`FORBIDDEN` (403),
 `NOT_FOUND` (404), `VALIDATION` (400/422), `INVALID_TRANSITION`, `CONFLICT` (409),
 `RATE_LIMITED` (429), `SERVER` (5xx). Le champ `message` doit être en français et affichable tel quel.
 
@@ -29,7 +31,9 @@ Codes d'erreur reconnus (`src/lib/api/errors.ts`) : `UNAUTHENTICATED` (401), `FO
 | --- | --- | --- | --- |
 | GET | `/api/auth/session` | — | `Session` ou 401 si non connecté |
 | POST | `/api/auth/login` | `{ email, password }` | `Session` |
-| POST | `/api/auth/register` | `{ fullName, email, phone, role, password }` | `Session` |
+| POST | `/api/auth/register` | `{ fullName, email, phone, role, password }` | 201 `{ user: User, verificationRequired: true }` (aucune session) |
+| POST | `/api/auth/email/verify` | `{ token }` | `Session` : l'adresse est confirmée et la session ouverte |
+| POST | `/api/auth/email/resend` | `{ email }` | 204, **même si le compte n'existe pas** |
 | POST | `/api/auth/logout` | — | 204 |
 | POST | `/api/auth/password/forgot` | `{ email }` | 204, **même si le compte n'existe pas** |
 | POST | `/api/auth/password/reset` | `{ token, password }` | 204 |
@@ -37,6 +41,15 @@ Codes d'erreur reconnus (`src/lib/api/errors.ts`) : `UNAUTHENTICATED` (401), `FO
 | POST | `/api/auth/password/change` | `{ currentPassword, newPassword }` | 204 |
 
 `role` ∈ `client`, `vendeur`, `prestataire`. `Session` = `{ user: User, isDemo: false }`.
+
+Confirmation de l'adresse e-mail :
+
+- L'inscription n'ouvre pas de session. Le backend envoie un lien
+  `{FRONTEND_URL}/verification-email?token=…`, traité par la page `/verification-email`.
+- Tant que l'adresse n'est pas confirmée, `POST /api/auth/login` répond 403 avec le code
+  `EMAIL_NOT_VERIFIED` (après vérification du mot de passe) ; l'interface propose alors de renvoyer le lien.
+- Le lien de réinitialisation du mot de passe pointe vers `{FRONTEND_URL}/reinitialisation-mot-de-passe?token=…`.
+- `GET /api/auth/session` pose le cookie `csrftoken` lu par le frontend pour les requêtes suivantes.
 
 ## Transactions
 

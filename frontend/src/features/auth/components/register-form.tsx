@@ -2,6 +2,7 @@
 
 import Link from "next/link"
 import { useRouter } from "next/navigation"
+import { useState } from "react"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { Controller, useForm } from "react-hook-form"
 import { Loader2 } from "lucide-react"
@@ -15,10 +16,12 @@ import { useRegister } from "../hooks"
 import { ROLE_DESCRIPTIONS, ROLE_LABELS } from "../roles"
 import { type RegisterValues, registerSchema } from "../schemas/auth-schemas"
 import { USER_ROLES } from "../types"
+import { EmailVerificationNotice } from "./email-verification-notice"
 
 export function RegisterForm() {
   const router = useRouter()
   const registerMutation = useRegister()
+  const [pendingEmail, setPendingEmail] = useState<string | null>(null)
   const {
     register,
     control,
@@ -42,11 +45,16 @@ export function RegisterForm() {
     registerMutation.mutate(
       { fullName, email, phone: phone === "" ? null : phone, role, password },
       {
-        onSuccess: () => router.replace("/dashboard"),
+        onSuccess: (result) => {
+          if (result.status === "verification_required") setPendingEmail(result.email)
+          else router.replace("/dashboard")
+        },
         onError: (error) => handleFormError(error, setError, ["fullName", "email", "phone", "password"]),
       },
     ),
   )
+
+  if (pendingEmail) return <EmailVerificationNotice email={pendingEmail} reason="registered" />
 
   return (
     <form onSubmit={onSubmit} noValidate aria-label="Inscription">
