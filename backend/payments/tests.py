@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import re
 from unittest.mock import patch
 
 from django.test import TestCase, override_settings
@@ -167,14 +168,22 @@ class WhoamiTests(TestCase):
 
 class DocumentationTests(TestCase):
     def test_schema_couvre_toutes_les_routes(self):
-        from .urls import urlpatterns
+        from accounts.urls import urlpatterns as routes_comptes
+        from transactions.urls import urlpatterns as routes_transactions
+
+        from .urls import urlpatterns as routes_paiements
 
         r = self.client.get("/api/schema/")
         self.assertEqual(r.status_code, 200)
         chemins = set(r.json()["paths"])
-        for route in urlpatterns:
-            chemin = "/payments/" + str(route.pattern).replace("<str:reference>", "{reference}")
-            self.assertIn(chemin, chemins)
+        for prefixe, routes in (
+            ("/api/", routes_comptes),
+            ("/api/", routes_transactions),
+            ("/payments/", routes_paiements),
+        ):
+            for route in routes:
+                motif = re.sub(r"<(?:str|uuid):(\w+)>", r"{\1}", str(route.pattern)).replace("{pk}", "{id}")
+                self.assertIn(prefixe + motif, chemins)
 
     @override_settings(DEBUG=False)
     def test_swagger_ui_accessible_en_production(self):

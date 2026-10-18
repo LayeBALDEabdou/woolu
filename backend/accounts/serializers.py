@@ -10,7 +10,7 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from .models import Role
 
 User = get_user_model()
-SELF_REGISTER_ROLES = (Role.CLIENT, Role.PRESTATAIRE)
+SELF_REGISTER_ROLES = (Role.CLIENT, Role.VENDEUR, Role.PRESTATAIRE)
 
 
 class UserSerializer(serializers.ModelSerializer):

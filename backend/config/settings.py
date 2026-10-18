@@ -52,6 +52,7 @@ INSTALLED_APPS = [
     'corsheaders',
     'accounts.apps.AccountsConfig',
     'payments',
+    'transactions',
 ]
 
 MIDDLEWARE = [
@@ -151,19 +152,47 @@ STORAGES = {
     'staticfiles': {'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage'},
 }
 
-# Origines autorisées à appeler l'API (ex: http://mon-vps:3004)
-CORS_ALLOWED_ORIGINS = [o for o in os.environ.get('CORS_ALLOWED_ORIGINS', 'http://localhost:5173').split(',') if o]
+# Origines autorisées à appeler l'API (ex: https://woolu.twoylit.tech)
+CORS_ALLOWED_ORIGINS = [o for o in os.environ.get('CORS_ALLOWED_ORIGINS', 'http://localhost:3000').split(',') if o]
 CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS
+# Le frontend envoie le cookie de session (fetch avec credentials: "include")
+CORS_ALLOW_CREDENTIALS = True
+
+# Adresse du frontend, pour les liens envoyés par email
+FRONTEND_URL = os.environ.get('FRONTEND_URL', CORS_ALLOWED_ORIGINS[0]).rstrip('/')
+
+# Cookies de session et CSRF : HTTPS uniquement en production
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+# Le frontend lit csrftoken avec document.cookie : si l'API est sur un autre sous-domaine,
+# mettre le domaine parent (ex: .twoylit.tech) pour que le frontend puisse le lire
+CSRF_COOKIE_DOMAIN = os.environ.get('CSRF_COOKIE_DOMAIN') or None
 
 
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
 
-MAILERS = {
-    'default': {
-        'BACKEND': 'django.core.mail.backends.console.EmailBackend',
-    },
-}
+# SMTP si EMAIL_HOST est défini (voir .env.example), sinon les emails s'affichent dans la console
+if os.environ.get('EMAIL_HOST'):
+    MAILERS = {
+        'default': {
+            'BACKEND': 'django.core.mail.backends.smtp.EmailBackend',
+            'OPTIONS': {
+                'host': os.environ['EMAIL_HOST'],
+                'port': int(os.environ.get('EMAIL_PORT', '587')),
+                'username': os.environ.get('EMAIL_HOST_USER', ''),
+                'password': os.environ.get('EMAIL_HOST_PASSWORD', ''),
+                # 587 : STARTTLS ; 465 : SSL direct
+                'use_tls': os.environ.get('EMAIL_PORT', '587') != '465',
+                'use_ssl': os.environ.get('EMAIL_PORT') == '465',
+                'timeout': 10,
+            },
+        },
+    }
+else:
+    MAILERS = {'default': {'BACKEND': 'django.core.mail.backends.console.EmailBackend'}}
+
+DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'Wóolu <no-reply@localhost>')
 
 
 # --- Bitnob (valeurs lues depuis le .env) ---
@@ -177,12 +206,18 @@ LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
     'handlers': {'console': {'class': 'logging.StreamHandler'}},
-    'loggers': {'payments': {'handlers': ['console'], 'level': 'INFO'}},
+    'loggers': {
+        'payments': {'handlers': ['console'], 'level': 'INFO'},
+        'accounts': {'handlers': ['console'], 'level': 'INFO'},
+    },
 }
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
+        # JWT pour Swagger et les autres clients ; en premier pour qu'un appel anonyme reçoive 401
         'rest_framework_simplejwt.authentication.JWTAuthentication',
+        # Session pour le frontend (vérifie le jeton CSRF)
+        'rest_framework.authentication.SessionAuthentication',
     ),
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
@@ -190,6 +225,7 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         'login': '20/min',
         'register': '10/hour',
+        'password': '10/hour',
     },
 }
 
