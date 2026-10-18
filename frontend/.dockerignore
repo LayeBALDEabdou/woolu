@@ -1,3 +1,8 @@
 node_modules
+.next
 dist
 .env
+.env.local
+e2e
+playwright-report
+test-results
