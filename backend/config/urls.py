@@ -23,6 +23,7 @@ from payments import openapi
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('api/', include('accounts.urls')),
     path('payments/', include('payments.urls')),
     path('api/schema/', openapi.schema),
     path('api/docs/', openapi.docs),
