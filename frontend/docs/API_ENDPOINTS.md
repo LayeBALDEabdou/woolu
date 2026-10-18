@@ -1,8 +1,9 @@
 # Contrat d'API attendu par le frontend
 
 Ce document liste les endpoints que le frontend appelle en mode `api`
-(`NEXT_PUBLIC_APP_MODE=api`). L'**authentification** est implémentée dans `backend/accounts` et
-branchée ; les transactions sont en cours dans `backend/transactions`. Le reste est le contrat à
+(`NEXT_PUBLIC_APP_MODE=api`). Sont implémentés et branchés : l'**authentification**
+(`backend/accounts`), les **transactions**, la **livraison** et le **tableau de bord**
+(`backend/transactions`). Les paiements, les réclamations et les notifications restent le contrat à
 implémenter ou à négocier avec l'équipe backend.
 
 Les implémentations HTTP correspondantes se trouvent dans `src/features/*/services/*-service.ts`.

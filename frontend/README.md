@@ -6,8 +6,9 @@ par le serveur, puis les fonds ne sont libérés qu'après confirmation de la li
 
 > **État actuel** : le frontend est complet en **mode démonstration** (données et paiements simulés dans
 > le navigateur). En mode `api`, l'**authentification** fonctionne avec le backend Django du dépôt
-> (inscription, confirmation de l'adresse e-mail, connexion, profil, mots de passe). Les autres domaines
-> sont en cours de branchement. Le contrat attendu est décrit dans [`docs/API_ENDPOINTS.md`](docs/API_ENDPOINTS.md).
+> (inscription, confirmation de l'adresse e-mail, connexion, profil, mots de passe), les **transactions**
+> (création, envoi, acceptation, refus, annulation, liste, tableau de bord) et la **livraison** fonctionnent
+> avec le backend Django du dépôt. Les paiements, réclamations et notifications sont en cours de branchement. Le contrat attendu est décrit dans [`docs/API_ENDPOINTS.md`](docs/API_ENDPOINTS.md).
 
 ## Sommaire
 
@@ -203,8 +204,11 @@ sont définis dans `next.config.ts`.
 
 ## Limites connues
 
-- **API partielle** : en mode `api`, seule l'authentification est branchée et vérifiée. Les autres
-  écrans appellent des endpoints que le backend n'expose pas encore (par exemple `/api/notifications`).
+- **API partielle** : en mode `api`, l'authentification, les transactions et la livraison sont branchées
+  et vérifiées. Les paiements (`/api/transactions/{id}/payments`), les réclamations et les notifications
+  appellent des endpoints que le backend n'expose pas encore : la page de paiement affiche donc une erreur
+  de chargement. En attendant le webhook Bitnob, l'action « Confirmer le paiement » de l'admin Django
+  (Transactions) fait passer une transaction en « fonds bloqués » pour tester la suite du parcours.
 - **Données de démo locales** : elles sont propres à chaque navigateur et non partagées entre appareils.
 - **Pièces justificatives** (photos de livraison, preuves de litige) : non implémentées, et signalées
   comme indisponibles dans l'interface.
